@@ -50,14 +50,14 @@ NOTA IMPORTANTE: "Módulo" en este catálogo = ensamble completo de pantalla+tá
 }
 
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
-  const groq = new Groq({ apiKey: GROQ_API_KEY });
-  const ext  = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "mp4" : mimeType.includes("mpeg") ? "mp3" : "ogg";
+  const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+  const ext    = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "mp4" : mimeType.includes("mpeg") ? "mp3" : "ogg";
 
-  const file = new File([audioBuffer], `audio.${ext}`, { type: mimeType });
+  const file = new File([audioBuffer as unknown as BlobPart], `audio.${ext}`, { type: mimeType });
 
-  const result = await groq.audio.transcriptions.create({
+  const result = await openai.audio.transcriptions.create({
     file,
-    model:    "whisper-large-v3",
+    model:    "whisper-1",
     language: "es",
   });
   return result.text?.trim() ?? "";
