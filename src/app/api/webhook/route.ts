@@ -353,22 +353,12 @@ export async function POST(req: NextRequest) {
         } catch (e) { console.warn("[mongo search]", e); }
       }
 
-      // Build history — keep all messages but trim long outbound product lists
-      // so the AI doesn't re-read old product catalogs and mix topics
+      // Build history — full context, no trimming
       const msgs = (freshConv.messages as Array<Record<string, unknown>>) ?? [];
-      const lastIdx = msgs.length - 1;
-      const history: AIMessage[] = msgs.map((m, i) => {
-        const isOut    = m.direction === "outbound";
-        const content  = (m.content as string) ?? "";
-        // Keep last outbound message full; truncate older ones if they're long
-        const trimmed  = isOut && i < lastIdx && content.length > 180
-          ? content.slice(0, 160) + "…"
-          : content;
-        return {
-          role: m.direction === "inbound" ? "user" : "assistant",
-          content: trimmed,
-        };
-      });
+      const history: AIMessage[] = msgs.map((m) => ({
+        role: m.direction === "inbound" ? "user" : "assistant",
+        content: (m.content as string) ?? "",
+      }));
 
       try {
         const aiText = await generateAIResponse(
