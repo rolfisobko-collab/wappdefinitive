@@ -21,11 +21,12 @@ type GlobalWithIO = {
 
 const STOP_WORDS = new Set([
   "para", "que", "como", "con", "por", "una", "uno", "los", "las", "del",
-  "esto", "esta", "tiene", "tenes", "cuanto", "precio", "hay", "quiero",
+  "esto", "esta", "tiene", "tenes", "cuanto", "hay", "quiero",
   "necesito", "busco", "hola", "buenas", "buenos", "gracias", "quisiera",
   "podria", "podes", "tienen", "puedo", "ver", "lista", "catalogo", "haber",
-  "dame", "manda", "mandame", "sos", "son", "mas", "sin", "saber", "que",
-  "alguno", "alguna", "donde", "cuando", "como", "cual", "tenes",
+  "dame", "manda", "mandame", "sos", "son", "mas", "sin", "saber",
+  "alguno", "alguna", "donde", "cuando", "cual", "tenes", "info",
+  // NO incluir "precio", "stock", "disponible" — son señales de búsqueda
 ]);
 
 function extractKeywords(text: string): string[] {

@@ -19,41 +19,79 @@ export async function getMongoDB(): Promise<Db> {
 
 // ─── Synonyms ───────────────────────────────────────────────────────────────
 
+// Strip accents for lookup key
+function stripAccents(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+// Build accent-insensitive regex pattern: "modulo" → "m[oó]d[uú]l[oó]"
+function accentRegex(term: string): string {
+  return stripAccents(term)
+    .replace(/[aá]/gi, "[aáAÁ]")
+    .replace(/[eé]/gi, "[eéEÉ]")
+    .replace(/[ií]/gi, "[iíIÍ]")
+    .replace(/[oó]/gi, "[oóOÓ]")
+    .replace(/[uúü]/gi, "[uúüUÚÜ]")
+    .replace(/[nñ]/gi, "[nñNÑ]");
+}
+
 const SYNONYMS: Record<string, string[]> = {
-  pantalla:    ["display", "lcd", "tactil", "tela", "vidrio", "screen"],
-  display:     ["pantalla", "lcd", "tactil", "tela", "screen"],
-  lcd:         ["pantalla", "display", "tactil"],
-  bateria:     ["battery", "pila", "batería"],
+  // Pantallas / módulos (la misma cosa en telefonía)
+  modulo:      ["pantalla", "display", "lcd", "tactil", "tela", "módulo", "módulos", "modulos"],
+  modulos:     ["pantalla", "display", "lcd", "tactil", "tela", "módulo", "módulos", "modulo"],
+  pantalla:    ["display", "lcd", "tactil", "tela", "vidrio", "screen", "modulo", "módulo"],
+  display:     ["pantalla", "lcd", "tactil", "tela", "screen", "modulo", "módulo"],
+  lcd:         ["pantalla", "display", "tactil", "modulo"],
+  // Baterías
+  bateria:     ["battery", "pila", "batería", "bat"],
   battery:     ["bateria", "pila", "batería"],
+  // Placas
   placa:       ["board", "motherboard", "madre", "pcb"],
   board:       ["placa", "motherboard", "madre"],
+  // Cámaras
   camara:      ["camera", "lente", "sensor", "foto"],
   camera:      ["camara", "lente", "sensor"],
-  flex:        ["fpc", "ribbon", "cable flex"],
+  // Flex / FPC
+  flex:        ["fpc", "ribbon"],
   fpc:         ["flex", "ribbon"],
-  cargador:    ["charger", "pin carga", "usb", "dock"],
+  // Cargadores
+  cargador:    ["charger", "pin carga", "usb", "dock", "conector"],
   charger:     ["cargador", "pin carga"],
+  // Audio
   auricular:   ["earpiece", "parlante", "altavoz", "bocina"],
   parlante:    ["auricular", "earpiece", "bocina", "altavoz"],
-  tactil:      ["touch", "pantalla", "vidrio"],
+  // Touch / táctil
+  tactil:      ["touch", "pantalla", "vidrio", "modulo"],
   touch:       ["tactil", "pantalla", "vidrio"],
+  // Micrófonos
   microfono:   ["mic", "micrófono"],
+  // Tapas / carcasas
   tapa:        ["back cover", "back glass", "contratapa", "carcasa"],
   carcasa:     ["tapa", "cover", "marco"],
-  encendido:   ["power", "boton power", "botón encendido"],
+  // Botones
+  encendido:   ["power", "boton power"],
   volumen:     ["volume", "boton volumen"],
-  conector:    ["puerto", "pin", "dock", "jack"],
+  // Conectores
+  conector:    ["puerto", "pin", "dock", "jack", "cargador"],
   vibrador:    ["vibration", "motor vibracion"],
 };
 
 export function expandKeywords(keywords: string[]): string[] {
-  const expanded = new Set(keywords);
+  const expanded = new Set<string>();
   for (const kw of keywords) {
-    const normalized = kw.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    const syns = SYNONYMS[normalized] ?? [];
-    for (const s of syns) expanded.add(s);
+    const norm = stripAccents(kw);
+    expanded.add(norm);
+    for (const s of SYNONYMS[norm] ?? []) expanded.add(stripAccents(s));
   }
   return Array.from(expanded);
+}
+
+// Build OR regex filter using accent-insensitive patterns
+export function buildSearchFilter(keywords: string[]): Record<string, unknown> {
+  const patterns = keywords.map((k) => ({
+    name: { $regex: accentRegex(k), $options: "i" },
+  }));
+  return { $or: patterns };
 }
 
 // ─── Order creation ──────────────────────────────────────────────────────────
@@ -209,12 +247,9 @@ export async function getMongoProducts(opts: {
       raw = [];
     }
 
-    // Fallback: OR regex on all expanded terms if text search returned < 2
+    // Fallback: accent-insensitive OR regex if text search returned < 2
     if (raw.length < 2) {
-      const orFilter = {
-        ...baseFilter,
-        $or: expanded.map((k) => ({ name: { $regex: k, $options: "i" } })),
-      };
+      const orFilter = { ...baseFilter, ...buildSearchFilter(expanded) };
       raw = await db.collection("stock").find(orFilter).limit(opts.limit ?? 10).toArray();
     }
   } else {
