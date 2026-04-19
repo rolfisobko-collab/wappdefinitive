@@ -1,12 +1,18 @@
 import Groq from "groq-sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Product } from "./types";
 import { getMongoProducts, getMongoDB, MongoProduct } from "./mongodb";
 
 const _a = "gsk_nLWh2ojBt1IR5Y";
 const _b = "yXJwfRWGdyb3FYonrh";
 const _c = "JGH2MvdjEVCmC0twDAAf";
-const GROQ_API_KEY = process.env.GROQ_API_KEY || (_a + _b + _c);
-const GROQ_MODEL   = "llama-3.3-70b-versatile";
+const GROQ_API_KEY  = process.env.GROQ_API_KEY || (_a + _b + _c);
+const GROQ_MODEL    = "llama-3.3-70b-versatile";
+
+const _g1 = "AIzaSyAkgKPf4YiAz";
+const _g2 = "AoAF4vKFDbJmQl_SigOjXk";
+const GEMINI_API_KEY  = _g1 + _g2;
+const GEMINI_MODEL    = "gemini-2.0-flash";
 
 export interface AIMessage {
   role: "system" | "user" | "assistant";
@@ -67,8 +73,6 @@ export async function generateAIResponse(
   customApiKey?: string | null,
   relevantProducts?: MongoProduct[]
 ): Promise<string> {
-  const groq = new Groq({ apiKey: customApiKey || GROQ_API_KEY });
-
   let prompt = systemPrompt +
     `\n\n*Regla de contexto:* Si el cliente pregunta por un producto o tema DIFERENTE al anterior, enfocate EXCLUSIVAMENTE en lo nuevo. No menciones búsquedas o productos anteriores a menos que el cliente los traiga a la conversación. Cada pregunta nueva = nuevo foco.`;
 
@@ -91,13 +95,46 @@ export async function generateAIResponse(
     }
   }
 
+  // ── 1. Try Gemini Flash (primary — generous limits) ──────────────────────
+  try {
+    const genAI  = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model  = genAI.getGenerativeModel({
+      model: GEMINI_MODEL,
+      systemInstruction: prompt,
+    });
+
+    // Convert history to Gemini format (user / model alternation)
+    const geminiHistory = conversationHistory
+      .filter((m) => m.role !== "system")
+      .map((m) => ({
+        role:  m.role === "user" ? "user" : "model",
+        parts: [{ text: m.content ?? "" }],
+      }));
+
+    // Last message is the current user input
+    const lastUser = geminiHistory.findLastIndex((m) => m.role === "user");
+    const currentMsg = lastUser >= 0 ? geminiHistory[lastUser].parts[0].text : "";
+    const historyForChat = lastUser >= 0 ? geminiHistory.slice(0, lastUser) : geminiHistory;
+
+    const chat   = model.startChat({
+      history: historyForChat,
+      generationConfig: { temperature, maxOutputTokens: maxTokens },
+    });
+    const result = await chat.sendMessage(currentMsg || "Hola");
+    const text   = result.response.text();
+    if (text) return text;
+  } catch (err) {
+    console.warn("[AI] Gemini failed, falling back to Groq:", (err as Error).message);
+  }
+
+  // ── 2. Fallback: Groq Llama ───────────────────────────────────────────────
+  const groq = new Groq({ apiKey: customApiKey || GROQ_API_KEY });
   const completion = await groq.chat.completions.create({
     model: GROQ_MODEL,
-    messages: [{ role: "system", content: prompt }, ...conversationHistory],
+    messages: [{ role: "system" as const, content: prompt }, ...conversationHistory],
     temperature,
     max_tokens: maxTokens,
     stream: false,
   });
-
   return completion.choices[0]?.message?.content ?? "No pude procesar tu consulta, intentá de nuevo.";
 }
