@@ -75,7 +75,7 @@ export async function generateAIResponse(
   relevantProducts?: MongoProduct[]
 ): Promise<string> {
   let prompt = systemPrompt +
-    `\n\n*Regla de contexto:* Si el cliente pregunta por un producto o tema DIFERENTE al anterior, enfocate EXCLUSIVAMENTE en lo nuevo. No menciones búsquedas o productos anteriores a menos que el cliente los traiga a la conversación. Cada pregunta nueva = nuevo foco.`;
+    `\n\n*Regla de contexto:* Sos un vendedor humano. Cuando el cliente pregunta algo nuevo, respondés SOLO sobre eso nuevo — como si no hubiese existido la pregunta anterior. NUNCA mencionés productos o temas previos de la conversación a menos que el cliente los nombre explícitamente. Cada pregunta es un tema fresco. No hagas puentes ni cierres temas anteriores.`;
 
   if (includeProducts) {
     if (relevantProducts && relevantProducts.length > 0) {
@@ -89,7 +89,7 @@ export async function generateAIResponse(
         const cat = p.category ? ` [${p.category}]` : "";
         return `- ${p.name}${cat} | ${price} | ${stockLabel}`;
       });
-      prompt += `\n\n--- PRODUCTOS ENCONTRADOS (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN ---\n\nIMPORTANTE: Tu respuesta debe ser un mensaje CORTO (máx. 2-3 líneas), marketinero y entusiasta, enfocado EXCLUSIVAMENTE en presentar estos productos específicos. Usá emojis con moderación. Invitá al cliente a ver las opciones y agregar al carrito. NO menciones nada que no tenga que ver con estos productos.`;
+      prompt += `\n\n--- PRODUCTOS ENCONTRADOS PARA LA CONSULTA ACTUAL (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN ---\n\n⚠️ INSTRUCCIÓN CRÍTICA PARA ESTE MENSAJE:\nEl cliente acaba de preguntar por ESTOS productos específicos. Ignorá COMPLETAMENTE cualquier tema o producto anterior de la conversación — eso ya pasó. Tu único trabajo ahora es presentar ESTOS productos de forma corta (máx. 2-3 líneas), entusiasta y marketinera. No menciones, no hagas referencia, no "cerrés" el tema anterior. Actuá como si fuese la primera vez que te preguntan algo hoy. Invitá a agregar al carrito. Solo emojis moderados.`;
     } else {
       // No specific products found — use general catalog
       prompt += await buildProductCatalogContext();
