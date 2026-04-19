@@ -69,7 +69,8 @@ export async function generateAIResponse(
 ): Promise<string> {
   const groq = new Groq({ apiKey: customApiKey || GROQ_API_KEY });
 
-  let prompt = systemPrompt;
+  let prompt = systemPrompt +
+    `\n\n*Regla de contexto:* Si el cliente pregunta por un producto o tema DIFERENTE al anterior, enfocate EXCLUSIVAMENTE en lo nuevo. No menciones búsquedas o productos anteriores a menos que el cliente los traiga a la conversación. Cada pregunta nueva = nuevo foco.`;
 
   if (includeProducts) {
     if (relevantProducts && relevantProducts.length > 0) {
