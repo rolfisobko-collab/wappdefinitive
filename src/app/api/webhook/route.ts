@@ -87,12 +87,22 @@ export async function POST(req: NextRequest) {
 
       if (await findMessageByWAId(msg.messageId)) continue;
 
-      // ── Handle audio transcription ────────────────────────────────────
+      // ── Handle media (image / audio) ──────────────────────────────────
       let transcribedText = msg.text;
+      let inboundMeta: string | undefined;
+      const rawMsg = msg.rawMessage as Record<string, unknown>;
+
+      if (msg.type === "image") {
+        const image = rawMsg.image as Record<string, string> | undefined;
+        if (image?.id) {
+          inboundMeta = JSON.stringify({ mediaId: image.id, caption: image.caption ?? "" });
+        }
+      }
+
       if (msg.type === "audio" && waConfig?.accessToken) {
-        const rawMsg = msg.rawMessage as Record<string, unknown>;
         const audioId = (rawMsg.audio as Record<string, string> | undefined)?.id;
         if (audioId) {
+          inboundMeta = JSON.stringify({ mediaId: audioId });
           try {
             const media = await downloadWAMedia(audioId, waConfig.accessToken);
             if (media) {
@@ -113,9 +123,10 @@ export async function POST(req: NextRequest) {
         waMessageId:    msg.messageId,
         direction:      "inbound",
         sender:         "contact",
-        type:           msg.interactivePayload ? "interactive" : "text",
+        type:           msg.interactivePayload ? "interactive" : msg.type as "text" | "image" | "audio" | "document",
         content:        displayText,
         status:         "delivered",
+        metadata:       inboundMeta,
       });
 
       await updateConversation(conversation.id, {

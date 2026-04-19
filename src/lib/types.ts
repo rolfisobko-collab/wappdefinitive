@@ -1,6 +1,6 @@
 export type MessageDirection = "inbound" | "outbound";
 export type MessageSender = "contact" | "agent" | "ai";
-export type MessageType = "text" | "image" | "document" | "interactive" | "cart";
+export type MessageType = "text" | "image" | "audio" | "document" | "interactive" | "cart";
 export type MessageStatus = "sent" | "delivered" | "read" | "failed";
 export type ConversationStatus = "open" | "resolved" | "pending";
 export type CartStatus = "active" | "sent" | "paid" | "abandoned";

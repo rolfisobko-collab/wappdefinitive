@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useChatStore } from "@/store/chatStore";
 import { ConversationItem } from "./ConversationItem";
 import { ConversationListItem } from "@/lib/types";
-import { Search, Plus, MessageSquare, Settings, Bot, X, Filter, ShoppingBag } from "lucide-react";
+import { Search, Plus, MessageSquare, Settings, Bot, X, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
@@ -85,11 +85,6 @@ export function ConversationSidebar({ onSelectConversation }: ConversationSideba
 
   const totalUnread = conversations.reduce((s, c) => s + c.unreadCount, 0);
 
-  const tabs = [
-    { id: "chats",    icon: MessageSquare, label: "Chats",    badge: totalUnread },
-    { id: "products", icon: ShoppingBag,   label: "Catálogo" },
-    { id: "settings", icon: Settings,      label: "Config." },
-  ];
 
   return (
     <div className="w-full sm:w-[340px] flex-shrink-0 flex flex-col bg-white border-r border-[#e9edef] h-full">
@@ -105,41 +100,26 @@ export function ConversationSidebar({ onSelectConversation }: ConversationSideba
             <p className="text-[11px] text-white/70 mt-0.5">Automatización con IA</p>
           </div>
         </div>
-        <button
-          onClick={() => setShowNew(true)}
-          className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-full transition-colors"
-          title="Nueva conversación"
-        >
-          <Plus className="w-5 h-5" />
-        </button>
-      </div>
-
-      {/* Tab nav */}
-      <div className="flex border-b border-[#e9edef] bg-white">
-        {tabs.map((tab) => (
+        <div className="flex items-center gap-0.5">
           <button
-            key={tab.id}
-            onClick={() => setSidebarTab(tab.id as "chats" | "products" | "settings")}
-            className={cn(
-              "flex-1 flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold transition-colors relative",
-              sidebarTab === tab.id
-                ? "text-[#008069] border-b-2 border-[#008069] -mb-px"
-                : "text-[#667781] hover:text-[#111b21]"
-            )}
+            onClick={() => setSidebarTab("settings" as "chats" | "products" | "settings")}
+            className="p-1.5 text-white/30 hover:text-white/70 hover:bg-white/10 rounded-full transition-colors"
+            title="Configuración"
           >
-            <tab.icon className="w-[18px] h-[18px]" />
-            {tab.label}
-            {tab.badge ? (
-              <span className="absolute top-1.5 right-1/4 bg-[#25d366] text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5">
-                {tab.badge > 99 ? "99+" : tab.badge}
-              </span>
-            ) : null}
+            <Settings className="w-4 h-4" />
           </button>
-        ))}
+          <button
+            onClick={() => setShowNew(true)}
+            className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-full transition-colors"
+            title="Nueva conversación"
+          >
+            <Plus className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
-      {/* Chats tab */}
-      {sidebarTab === "chats" && (
+      {/* Chats / Content */}
+      {(sidebarTab === "chats" || sidebarTab === "products") && (
         <>
           {/* Search */}
           <div className="px-3 py-2 bg-white">

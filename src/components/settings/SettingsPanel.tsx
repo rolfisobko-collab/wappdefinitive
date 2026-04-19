@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { AIConfig, WAConfig } from "@/lib/types";
-import { Bot, Webhook, Save, ChevronDown, ChevronUp, Info, Zap, Key, CheckCircle2, Eye, EyeOff, User, Image } from "lucide-react";
+import { Bot, Webhook, Save, ChevronDown, ChevronUp, Info, Zap, Key, CheckCircle2, Eye, EyeOff, User, Image, ArrowLeft } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/utils";
+import { useChatStore } from "@/store/chatStore";
 
 export function SettingsPanel() {
   const { toast } = useToast();
+  const { setSidebarTab } = useChatStore();
   const [aiConfig, setAiConfig] = useState<AIConfig & { hasGroqKey?: boolean } | null>(null);
   const [groqKeyInput, setGroqKeyInput] = useState("");
   const [showGroqKey, setShowGroqKey] = useState(false);
@@ -118,9 +120,18 @@ export function SettingsPanel() {
   return (
     <div className="flex-1 overflow-y-auto bg-[#f0f2f5] p-4 sm:p-6">
       <div className="max-w-xl mx-auto space-y-4">
-        <div className="mb-6">
-          <h2 className="text-xl font-bold text-[#111b21]">Configuración</h2>
-          <p className="text-sm text-[#667781] mt-0.5">Personalizá el asistente y conectá WhatsApp</p>
+        <div className="mb-6 flex items-center gap-3">
+          <button
+            onClick={() => setSidebarTab("chats")}
+            className="p-2 -ml-1 rounded-full text-[#54656f] hover:bg-[#e9edef] transition-colors"
+            title="Volver a chats"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h2 className="text-xl font-bold text-[#111b21]">Configuración</h2>
+            <p className="text-sm text-[#667781] mt-0.5">Personalizá el asistente y conectá WhatsApp</p>
+          </div>
         </div>
 
         {/* ─── IA ─── */}

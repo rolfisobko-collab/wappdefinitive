@@ -34,7 +34,10 @@ export function ChatHeader({ conversation, onToggleAI, onTogglePause, onResolve,
 
       <div className="flex-1 min-w-0">
         <p className="font-semibold text-sm text-[#111b21] truncate">{name}</p>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          {contact.name && (
+            <span className="text-[11px] text-[#667781] truncate">📱 {contact.phone}</span>
+          )}
           <span className={cn(
             "text-xs flex items-center gap-1",
             aiStatus === "on"     && "text-[#7c4dff]",
