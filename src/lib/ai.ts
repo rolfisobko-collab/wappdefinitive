@@ -84,7 +84,7 @@ export async function generateAIResponse(
         const cat = p.category ? ` [${p.category}]` : "";
         return `- ${p.name}${cat} | ${price} | ${stockLabel}`;
       });
-      prompt += `\n\n--- PRODUCTOS ENCONTRADOS (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN ---\nMencioná estos productos en tu respuesta con sus precios en USD y ARS.`;
+      prompt += `\n\n--- PRODUCTOS ENCONTRADOS (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN ---\n\nIMPORTANTE: Tu respuesta debe ser un mensaje CORTO (máx. 2-3 líneas), marketinero y entusiasta, enfocado EXCLUSIVAMENTE en presentar estos productos específicos. Usá emojis con moderación. Invitá al cliente a ver las opciones y agregar al carrito. NO menciones nada que no tenga que ver con estos productos.`;
     } else {
       // No specific products found — use general catalog
       prompt += await buildProductCatalogContext();
