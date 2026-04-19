@@ -151,9 +151,9 @@ export async function createMessage(data: {
   };
   await setDoc(doc(db, "messages", id), msgData);
 
-  // Denormalize lastMessage in conversation
+  // Denormalize lastMessage in conversation (use msgData so undefined → null)
   await updateDoc(doc(db, "conversations", data.conversationId), {
-    lastMessage: { id, ...data, createdAt: new Date() },
+    lastMessage: { id, ...msgData, createdAt: new Date() },
     lastMessageAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
