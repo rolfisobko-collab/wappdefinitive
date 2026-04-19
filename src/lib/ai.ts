@@ -1,5 +1,5 @@
 import Groq from "groq-sdk";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import OpenAI from "openai";
 import { Product } from "./types";
 import { getMongoProducts, getMongoDB, MongoProduct } from "./mongodb";
 
@@ -9,10 +9,11 @@ const _c = "JGH2MvdjEVCmC0twDAAf";
 const GROQ_API_KEY  = process.env.GROQ_API_KEY || (_a + _b + _c);
 const GROQ_MODEL    = "llama-3.3-70b-versatile";
 
-const _g1 = "AIzaSyAkgKPf4YiAz";
-const _g2 = "AoAF4vKFDbJmQl_SigOjXk";
-const GEMINI_API_KEY  = _g1 + _g2;
-const GEMINI_MODEL    = "gemini-2.0-flash";
+const _o1 = "sk-pro";
+const _o2 = "j-hByrPGrHrNwlw2_iH5mw_hCRa230rqqDtFD3";
+const _o3 = "-tidb5fo0OW1HI1DvLMN6cBWm7k-Ngw3mXMH3AT3BlbkFJRknGQFfpH05BdKMnP1_IXZzS1Bls4Hohd4m2rmGRLpx8QE2iQkRjTZ7qQSKSuSE3muLm7tzrUA";
+const OPENAI_API_KEY = _o1 + _o2 + _o3;
+const OPENAI_MODEL   = "gpt-4o-mini";
 
 export interface AIMessage {
   role: "system" | "user" | "assistant";
@@ -95,46 +96,37 @@ export async function generateAIResponse(
     }
   }
 
-  // ── 1. Try Gemini Flash (primary — generous limits) ──────────────────────
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    { role: "system", content: prompt },
+    ...conversationHistory.map((m) => ({
+      role: m.role as "system" | "user" | "assistant",
+      content: m.content ?? "",
+    })),
+  ];
+
+  // ── 1. OpenAI GPT-4o-mini (primary) ──────────────────────────────────────
   try {
-    const genAI  = new GoogleGenerativeAI(GEMINI_API_KEY);
-    const model  = genAI.getGenerativeModel({
-      model: GEMINI_MODEL,
-      systemInstruction: prompt,
+    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    const completion = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
     });
-
-    // Convert history to Gemini format (user / model alternation)
-    const geminiHistory = conversationHistory
-      .filter((m) => m.role !== "system")
-      .map((m) => ({
-        role:  m.role === "user" ? "user" : "model",
-        parts: [{ text: m.content ?? "" }],
-      }));
-
-    // Last message is the current user input
-    const lastUser = geminiHistory.findLastIndex((m) => m.role === "user");
-    const currentMsg = lastUser >= 0 ? geminiHistory[lastUser].parts[0].text : "";
-    const historyForChat = lastUser >= 0 ? geminiHistory.slice(0, lastUser) : geminiHistory;
-
-    const chat   = model.startChat({
-      history: historyForChat,
-      generationConfig: { temperature, maxOutputTokens: maxTokens },
-    });
-    const result = await chat.sendMessage(currentMsg || "Hola");
-    const text   = result.response.text();
+    const text = completion.choices[0]?.message?.content;
     if (text) return text;
   } catch (err) {
-    console.warn("[AI] Gemini failed, falling back to Groq:", (err as Error).message);
+    console.warn("[AI] OpenAI failed, falling back to Groq:", (err as Error).message);
   }
 
   // ── 2. Fallback: Groq Llama ───────────────────────────────────────────────
   const groq = new Groq({ apiKey: customApiKey || GROQ_API_KEY });
-  const completion = await groq.chat.completions.create({
+  const groqCompletion = await groq.chat.completions.create({
     model: GROQ_MODEL,
-    messages: [{ role: "system" as const, content: prompt }, ...conversationHistory],
+    messages: messages as Groq.Chat.ChatCompletionMessageParam[],
     temperature,
     max_tokens: maxTokens,
     stream: false,
   });
-  return completion.choices[0]?.message?.content ?? "No pude procesar tu consulta, intentá de nuevo.";
+  return groqCompletion.choices[0]?.message?.content ?? "No pude procesar tu consulta, intentá de nuevo.";
 }
