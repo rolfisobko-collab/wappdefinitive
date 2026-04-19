@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Contact {
+  id          String   @id @default(cuid())
+  phone       String   @unique
+  name        String?
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  conversations Conversation[]
+}
+
+model Conversation {
+  id          String   @id @default(cuid())
+  contactId   String
+  contact     Contact  @relation(fields: [contactId], references: [id])
+  aiEnabled   Boolean  @default(true)
+  aiPaused    Boolean  @default(false)
+  status      String   @default("open") // open | resolved | pending
+  unreadCount Int      @default(0)
+  lastMessageAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  messages Message[]
+  cart     Cart?
+}
+
+model Message {
+  id              String   @id @default(cuid())
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id])
+  waMessageId     String?  @unique
+  direction       String   // inbound | outbound
+  sender          String   // contact | agent | ai
+  type            String   @default("text") // text | image | document | interactive | cart
+  content         String
+  status          String   @default("sent") // sent | delivered | read | failed
+  metadata        String?  // JSON string for extra data
+  createdAt       DateTime @default(now())
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  price       Float
+  currency    String   @default("ARS")
+  imageUrl    String?
+  category    String?
+  sku         String?  @unique
+  stock       Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cartItems CartItem[]
+}
+
+model Cart {
+  id             String   @id @default(cuid())
+  conversationId String   @unique
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  status         String   @default("active") // active | sent | paid | abandoned
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items CartItem[]
+}
+
+model CartItem {
+  id        String  @id @default(cuid())
+  cartId    String
+  cart      Cart    @relation(fields: [cartId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int     @default(1)
+  unitPrice Float
+}
+
+model AIConfig {
+  id              String   @id @default(cuid())
+  name            String   @default("default")
+  systemPrompt    String
+  model           String   @default("llama-3.3-70b-versatile")
+  temperature     Float    @default(0.7)
+  maxTokens       Int      @default(500)
+  includeProducts Boolean  @default(true)
+  active          Boolean  @default(true)
+  groqApiKey      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model WAConfig {
+  id              String   @id @default(cuid())
+  phoneNumberId   String
+  accessToken     String
+  verifyToken     String
+  businessId      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
