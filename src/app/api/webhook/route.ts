@@ -6,7 +6,7 @@ import {
 } from "@/lib/db";
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
 import { generateAIResponse, transcribeAudio, AIMessage } from "@/lib/ai";
-import { getMongoProducts, getMongoProductById, MongoProduct } from "@/lib/mongodb";
+import { getMongoProducts, getMongoProductById, createOrderInMongo, expandKeywords, MongoProduct } from "@/lib/mongodb";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "wapp_hub_2026";
 
@@ -183,13 +183,34 @@ export async function POST(req: NextRequest) {
         // CONFIRM ORDER
         if (buttonId === "cart_confirm") {
           const cart  = await getCart(conversation.id);
-          const items = (cart as Record<string, unknown>)?.items as Array<{ name: string; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
-          const summary = items.length > 0 ? buildCartText(items) : "";
-          const confirmText = `✅ *¡Pedido confirmado!*\n\n${summary}\n\n¡Gracias! En breve un asesor te contacta para coordinar el pago y envío. 🙌`;
+          const items = (cart as Record<string, unknown>)?.items as Array<{ mongoProductId: string; name: string; image: string | null; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+
+          let orderId = "";
+          if (items.length > 0) {
+            try {
+              const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
+              orderId = await createOrderInMongo({
+                contactName: (contact as Record<string, unknown>).name as string || contact.phone,
+                phone:       contact.phone,
+                items:       items.map((i) => ({
+                  mongoProductId: i.mongoProductId,
+                  name:           i.name,
+                  image:          i.image,
+                  unitPriceUSD:   i.unitPriceUSD,
+                  quantity:       i.quantity,
+                })),
+                totalUSD,
+                notes: "Pedido via WhatsApp",
+              });
+            } catch (e) { console.error("[createOrder]", e); }
+          }
+
+          const summary    = items.length > 0 ? buildCartText(items) : "";
+          const confirmText = `✅ *¡Pedido confirmado!*\n\n${summary}\n\nEn breve un asesor te contacta para coordinar el pago y envío. ¡Gracias! 🙌`;
           await wa.sendTextMessage(contact.phone, confirmText);
           const confMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: confirmText, status: "sent" });
           io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: confMsg });
-          await updateConversation(conversation.id, { aiPaused: true });
+          await updateConversation(conversation.id, { aiPaused: true, orderId });
           continue;
         }
 
@@ -219,7 +240,8 @@ export async function POST(req: NextRequest) {
       let relevantProducts: MongoProduct[] = [];
       if (keywords.length > 0) {
         try {
-          const { products } = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false });
+          const expanded = expandKeywords(keywords);
+          const { products } = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false });
           relevantProducts = products;
         } catch (e) { console.warn("[mongo search]", e); }
       }

@@ -12,7 +12,96 @@ export async function getMongoDB(): Promise<Db> {
   await client.connect();
   cachedClient = client;
   cachedDb = client.db(DB_NAME);
+  // Ensure text index for search (idempotent)
+  cachedDb.collection("stock").createIndex({ name: "text", description: "text" }).catch(() => {});
   return cachedDb;
+}
+
+// ─── Synonyms ───────────────────────────────────────────────────────────────
+
+const SYNONYMS: Record<string, string[]> = {
+  pantalla:    ["display", "lcd", "tactil", "tela", "vidrio", "screen"],
+  display:     ["pantalla", "lcd", "tactil", "tela", "screen"],
+  lcd:         ["pantalla", "display", "tactil"],
+  bateria:     ["battery", "pila", "batería"],
+  battery:     ["bateria", "pila", "batería"],
+  placa:       ["board", "motherboard", "madre", "pcb"],
+  board:       ["placa", "motherboard", "madre"],
+  camara:      ["camera", "lente", "sensor", "foto"],
+  camera:      ["camara", "lente", "sensor"],
+  flex:        ["fpc", "ribbon", "cable flex"],
+  fpc:         ["flex", "ribbon"],
+  cargador:    ["charger", "pin carga", "usb", "dock"],
+  charger:     ["cargador", "pin carga"],
+  auricular:   ["earpiece", "parlante", "altavoz", "bocina"],
+  parlante:    ["auricular", "earpiece", "bocina", "altavoz"],
+  tactil:      ["touch", "pantalla", "vidrio"],
+  touch:       ["tactil", "pantalla", "vidrio"],
+  microfono:   ["mic", "micrófono"],
+  tapa:        ["back cover", "back glass", "contratapa", "carcasa"],
+  carcasa:     ["tapa", "cover", "marco"],
+  encendido:   ["power", "boton power", "botón encendido"],
+  volumen:     ["volume", "boton volumen"],
+  conector:    ["puerto", "pin", "dock", "jack"],
+  vibrador:    ["vibration", "motor vibracion"],
+};
+
+export function expandKeywords(keywords: string[]): string[] {
+  const expanded = new Set(keywords);
+  for (const kw of keywords) {
+    const normalized = kw.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const syns = SYNONYMS[normalized] ?? [];
+    for (const s of syns) expanded.add(s);
+  }
+  return Array.from(expanded);
+}
+
+// ─── Order creation ──────────────────────────────────────────────────────────
+
+export interface WAOrder {
+  mongoProductId: string;
+  name: string;
+  image: string | null;
+  unitPriceUSD: number;
+  quantity: number;
+}
+
+export async function createOrderInMongo(data: {
+  contactName: string;
+  phone: string;
+  items: WAOrder[];
+  totalUSD: number;
+  notes?: string;
+}): Promise<string> {
+  const db = await getMongoDB();
+  const result = await db.collection("orders").insertOne({
+    customer:      data.contactName,
+    phone:         data.phone,
+    email:         "",
+    source:        "whatsapp",
+    status:        "pending",
+    items:         data.items.map((i) => ({
+      productId: i.mongoProductId,
+      name:      i.name,
+      price:     i.unitPriceUSD,
+      quantity:  i.quantity,
+      image:     i.image,
+    })),
+    subtotal:      data.totalUSD,
+    shipping:      0,
+    total:         data.totalUSD,
+    paymentMethod: "pending",
+    paymentStatus: "pending",
+    shippingAddress: {
+      street: "", city: "", state: "", zipCode: "", country: "Argentina",
+    },
+    notes:         data.notes ?? "Pedido via WhatsApp",
+    createdAt:     new Date().toISOString(),
+    updatedAt:     new Date().toISOString(),
+    __v:           0,
+    statusHistory: [],
+  });
+  return result.insertedId.toString();
 }
 
 export interface MongoProduct {
@@ -92,23 +181,45 @@ export async function getMongoProducts(opts: {
     icon: c.icon as string | undefined,
   })).sort((a, b) => a.name.localeCompare(b.name));
 
-  // Build filter
-  const filter: Record<string, unknown> = {
+  // Base filter
+  const baseFilter: Record<string, unknown> = {
     isActive: { $ne: false },
-    price: { $gt: 0 },
+    price:    { $gt: 0 },
   };
+  if (opts.categoryId)  baseFilter.category = opts.categoryId;
+  if (opts.onlyAvailable) baseFilter.quantity = { $gt: 0 };
 
-  // Keyword OR search (most specific)
-  if (opts.keywords?.length) {
-    filter.$or = opts.keywords.map((k) => ({ name: { $regex: k, $options: "i" } }));
-  } else if (opts.search) {
-    filter.name = { $regex: opts.search, $options: "i" };
+  let raw;
+
+  if (opts.keywords?.length || opts.search) {
+    // Expand keywords with synonyms
+    const rawKeywords = opts.keywords ?? (opts.search ? [opts.search] : []);
+    const expanded    = expandKeywords(rawKeywords);
+
+    // Try text index first (best relevance)
+    try {
+      const textSearch = expanded.join(" ");
+      const textFilter = { ...baseFilter, $text: { $search: textSearch } };
+      raw = await db.collection("stock")
+        .find(textFilter, { projection: { score: { $meta: "textScore" } } })
+        .sort({ score: { $meta: "textScore" } })
+        .limit(opts.limit ?? 10)
+        .toArray();
+    } catch {
+      raw = [];
+    }
+
+    // Fallback: OR regex on all expanded terms if text search returned < 2
+    if (raw.length < 2) {
+      const orFilter = {
+        ...baseFilter,
+        $or: expanded.map((k) => ({ name: { $regex: k, $options: "i" } })),
+      };
+      raw = await db.collection("stock").find(orFilter).limit(opts.limit ?? 10).toArray();
+    }
+  } else {
+    raw = await db.collection("stock").find(baseFilter).limit(opts.limit ?? 300).toArray();
   }
-
-  if (opts.categoryId) filter.category = opts.categoryId;
-  if (opts.onlyAvailable) filter.quantity = { $gt: 0 };
-
-  const raw = await db.collection("stock").find(filter).limit(opts.limit ?? 300).toArray();
 
   const products: MongoProduct[] = raw.map((p) => {
     const price = (p.price as number) ?? 0;
