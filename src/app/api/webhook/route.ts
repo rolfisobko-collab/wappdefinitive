@@ -7,6 +7,7 @@ import {
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
 import { generateAIResponse, transcribeAudio, AIMessage } from "@/lib/ai";
 import { getMongoProducts, getMongoProductById, createOrderInMongo, expandKeywords, MongoProduct } from "@/lib/mongodb";
+import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "wapp_hub_2026";
 
@@ -181,37 +182,129 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // CONFIRM ORDER
+        // CONFIRM ORDER → ask payment method
         if (buttonId === "cart_confirm") {
           const cart  = await getCart(conversation.id);
-          const items = (cart as Record<string, unknown>)?.items as Array<{ mongoProductId: string; name: string; image: string | null; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
-
-          let orderId = "";
-          if (items.length > 0) {
-            try {
-              const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
-              orderId = await createOrderInMongo({
-                contactName: (contact as Record<string, unknown>).name as string || contact.phone,
-                phone:       contact.phone,
-                items:       items.map((i) => ({
-                  mongoProductId: i.mongoProductId,
-                  name:           i.name,
-                  image:          i.image,
-                  unitPriceUSD:   i.unitPriceUSD,
-                  quantity:       i.quantity,
-                })),
-                totalUSD,
-                notes: "Pedido via WhatsApp",
-              });
-            } catch (e) { console.error("[createOrder]", e); }
+          const items = (cart as Record<string, unknown>)?.items as Array<{ name: string; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+          if (!items.length) {
+            await wa.sendTextMessage(contact.phone, "Tu carrito está vacío. Agregá productos primero 😊");
+            continue;
           }
+          const payText = `💳 *¿Cómo querés abonar?*\n\n${buildCartText(items)}`;
+          try {
+            await wa.sendInteractiveList(
+              contact.phone,
+              "Método de pago",
+              payText,
+              "Alta Telefonía",
+              "Ver opciones",
+              [{
+                title: "Elegí tu método",
+                rows: [
+                  { id: "pay_mp",       title: "💳 MercadoPago",        description: "Link de pago instantáneo" },
+                  { id: "pay_transfer", title: "🏦 Transferencia",       description: `Banco Santander · Recargo 2.5%` },
+                  { id: "pay_usdt",     title: "💵 USDT TRC-20",         description: "Crypto · Red TRON" },
+                  { id: "pay_cash",     title: "🏪 Efectivo en local",   description: "Retiro y pago en el local" },
+                ],
+              }]
+            );
+          } catch {
+            // Fallback a botones si el list falla
+            await wa.sendButtons(contact.phone, payText, [
+              { id: "pay_mp",       title: "💳 MercadoPago" },
+              { id: "pay_transfer", title: "🏦 Transferencia" },
+              { id: "pay_cash",     title: "🏪 Efectivo/USDT" },
+            ]);
+          }
+          const payMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: payText, status: "sent" });
+          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: payMsg });
+          continue;
+        }
 
-          const summary    = items.length > 0 ? buildCartText(items) : "";
-          const confirmText = `✅ *¡Pedido confirmado!*\n\n${summary}\n\nEn breve un asesor te contacta para coordinar el pago y envío. ¡Gracias! 🙌`;
-          await wa.sendTextMessage(contact.phone, confirmText);
-          const confMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: confirmText, status: "sent" });
-          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: confMsg });
-          await updateConversation(conversation.id, { aiPaused: true, orderId });
+        // PAYMENT: MERCADOPAGO
+        if (buttonId === "pay_mp") {
+          const cart  = await getCart(conversation.id);
+          const items = (cart as Record<string, unknown>)?.items as Array<{ mongoProductId: string; name: string; image: string | null; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+          try {
+            const link = await createMPPreference(
+              items.map((i) => ({ name: i.name, quantity: i.quantity, unitPriceARS: i.unitPriceARS * i.quantity })),
+              contact.phone
+            );
+            const mpText = `💳 *Tu link de pago MercadoPago:*\n\n${link}\n\n_Una vez abonado te confirmamos el pedido. ¡Gracias! 😊_`;
+            await wa.sendTextMessage(contact.phone, mpText);
+            const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
+            await createOrderInMongo({ contactName: (contact as Record<string,unknown>).name as string || contact.phone, phone: contact.phone, items: items.map(i => ({ mongoProductId: i.mongoProductId, name: i.name, image: i.image, unitPriceUSD: i.unitPriceUSD, quantity: i.quantity })), totalUSD, notes: "Pago via MercadoPago" });
+            const mpMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: mpText, status: "sent" });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: mpMsg });
+            await updateConversation(conversation.id, { aiPaused: true });
+          } catch (e) {
+            console.error("[pay_mp]", e);
+            await wa.sendTextMessage(contact.phone, "Hubo un error al generar el link. Por favor escribinos y te ayudamos 🙏");
+          }
+          continue;
+        }
+
+        // PAYMENT: TRANSFERENCIA BANCARIA (+2.5%)
+        if (buttonId === "pay_transfer") {
+          const cart  = await getCart(conversation.id);
+          const items = (cart as Record<string, unknown>)?.items as Array<{ mongoProductId: string; name: string; image: string | null; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+          const baseARS  = items.reduce((s, i) => s + i.unitPriceARS * i.quantity, 0);
+          const { surcharge, total } = calcTransferTotal(baseARS);
+          const fARS = (n: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
+          const transferText =
+            `🏦 *Datos para transferencia:*\n\n` +
+            `Alias: *${TRANSFER_INFO.alias}*\n` +
+            `Banco: ${TRANSFER_INFO.banco}\n` +
+            `Titular: ${TRANSFER_INFO.titular}\n` +
+            `CUIT: ${TRANSFER_INFO.cuit}\n\n` +
+            `Subtotal: ${fARS(baseARS)}\n` +
+            `Recargo 2.5%: ${fARS(surcharge)}\n` +
+            `*Total a transferir: ${fARS(total)}*\n\n` +
+            `_Una vez realizada la transferencia, envianos el comprobante por este chat. ¡Gracias! 😊_`;
+          await wa.sendTextMessage(contact.phone, transferText);
+          const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
+          await createOrderInMongo({ contactName: (contact as Record<string,unknown>).name as string || contact.phone, phone: contact.phone, items: items.map(i => ({ mongoProductId: i.mongoProductId, name: i.name, image: i.image, unitPriceUSD: i.unitPriceUSD, quantity: i.quantity })), totalUSD, notes: "Pago via transferencia bancaria" });
+          const trMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: transferText, status: "sent" });
+          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: trMsg });
+          await updateConversation(conversation.id, { aiPaused: true });
+          continue;
+        }
+
+        // PAYMENT: USDT TRC-20
+        if (buttonId === "pay_usdt") {
+          const cart  = await getCart(conversation.id);
+          const items = (cart as Record<string, unknown>)?.items as Array<{ mongoProductId: string; name: string; image: string | null; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+          const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
+          const usdtText =
+            `💵 *Pago en USDT (TRC-20 / TRON):*\n\n` +
+            `Dirección:\n*${USDT_INFO.address}*\n\n` +
+            `*Total a enviar: ${totalUSD.toFixed(2)} USDT*\n\n` +
+            `${USDT_INFO.warning}\n\n` +
+            `_Una vez enviado, mandanos el hash de la transacción por este chat. ¡Gracias! 😊_`;
+          await wa.sendTextMessage(contact.phone, usdtText);
+          await createOrderInMongo({ contactName: (contact as Record<string,unknown>).name as string || contact.phone, phone: contact.phone, items: items.map(i => ({ mongoProductId: i.mongoProductId, name: i.name, image: i.image, unitPriceUSD: i.unitPriceUSD, quantity: i.quantity })), totalUSD, notes: "Pago via USDT TRC-20" });
+          const usdtMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: usdtText, status: "sent" });
+          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: usdtMsg });
+          await updateConversation(conversation.id, { aiPaused: true });
+          continue;
+        }
+
+        // PAYMENT: EFECTIVO EN LOCAL
+        if (buttonId === "pay_cash") {
+          const cart  = await getCart(conversation.id);
+          const items = (cart as Record<string, unknown>)?.items as Array<{ mongoProductId: string; name: string; image: string | null; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+          const baseARS  = items.reduce((s, i) => s + i.unitPriceARS * i.quantity, 0);
+          const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
+          const fARS = (n: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
+          const cashText =
+            `🏪 *Retiro y pago en el local*\n\n` +
+            `*Total a abonar: ${fARS(baseARS)}*\n\n` +
+            `Te esperamos en el local. Un asesor te va a confirmar la disponibilidad y coordinar el horario de retiro. 😊`;
+          await wa.sendTextMessage(contact.phone, cashText);
+          await createOrderInMongo({ contactName: (contact as Record<string,unknown>).name as string || contact.phone, phone: contact.phone, items: items.map(i => ({ mongoProductId: i.mongoProductId, name: i.name, image: i.image, unitPriceUSD: i.unitPriceUSD, quantity: i.quantity })), totalUSD, notes: "Pago en efectivo en local" });
+          const cashMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: cashText, status: "sent" });
+          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cashMsg });
+          await updateConversation(conversation.id, { aiPaused: true });
           continue;
         }
 
