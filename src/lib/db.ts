@@ -334,16 +334,13 @@ export async function addToCart(
 ) {
   const cartId = await getOrCreateCart(conversationId);
 
-  const existingQ = query(
-    collection(db, "cartItems"),
-    where("cartId", "==", cartId),
-    where("mongoProductId", "==", product.mongoProductId),
-    limit(1)
-  );
+  // Single where clause to avoid composite index
+  const existingQ = query(collection(db, "cartItems"), where("cartId", "==", cartId));
   const existingSnap = await getDocs(existingQ);
+  const existingDoc = existingSnap.docs.find((d) => d.data().mongoProductId === product.mongoProductId);
 
-  if (!existingSnap.empty) {
-    await updateDoc(existingSnap.docs[0].ref, { quantity: (existingSnap.docs[0].data().quantity ?? 1) + quantity });
+  if (existingDoc) {
+    await updateDoc(existingDoc.ref, { quantity: (existingDoc.data().quantity ?? 1) + quantity });
   } else {
     await setDoc(doc(db, "cartItems", uuid()), {
       cartId,

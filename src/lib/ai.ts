@@ -1,6 +1,7 @@
 import Groq from "groq-sdk";
 import { Product } from "./types";
 import { getMongoProducts, MongoProduct } from "./mongodb";
+import { Readable } from "stream";
 
 const _a = "gsk_nLWh2ojBt1IR5Y";
 const _b = "yXJwfRWGdyb3FYonrh";
@@ -31,6 +32,21 @@ async function buildProductCatalogContext(): Promise<string> {
   } catch {
     return "";
   }
+}
+
+export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
+  const groq = new Groq({ apiKey: GROQ_API_KEY });
+  const ext  = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "mp4" : mimeType.includes("mpeg") ? "mp3" : "ogg";
+
+  // Groq Whisper needs a File-like object
+  const file = new File([audioBuffer], `audio.${ext}`, { type: mimeType });
+
+  const result = await groq.audio.transcriptions.create({
+    file,
+    model:    "whisper-large-v3",
+    language: "es",
+  });
+  return result.text?.trim() ?? "";
 }
 
 export async function generateAIResponse(

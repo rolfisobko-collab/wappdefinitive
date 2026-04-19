@@ -4,8 +4,8 @@ import {
   findMessageByWAId, updateConversation, getAIConfig, getWAConfig,
   addToCart, getCart, removeFromCart,
 } from "@/lib/db";
-import { parseIncomingWebhook, getWAClient, WAWebhookBody } from "@/lib/whatsapp";
-import { generateAIResponse, AIMessage } from "@/lib/ai";
+import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
+import { generateAIResponse, transcribeAudio, AIMessage } from "@/lib/ai";
 import { getMongoProducts, getMongoProductById, MongoProduct } from "@/lib/mongodb";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "wapp_hub_2026";
@@ -85,10 +85,26 @@ export async function POST(req: NextRequest) {
 
       if (await findMessageByWAId(msg.messageId)) continue;
 
+      // ── Handle audio transcription ────────────────────────────────────
+      let transcribedText = msg.text;
+      if (msg.type === "audio" && waConfig?.accessToken) {
+        const rawMsg = msg.rawMessage as Record<string, unknown>;
+        const audioId = (rawMsg.audio as Record<string, string> | undefined)?.id;
+        if (audioId) {
+          try {
+            const media = await downloadWAMedia(audioId, waConfig.accessToken);
+            if (media) {
+              const txt = await transcribeAudio(media.buffer, media.mime);
+              if (txt) transcribedText = txt;
+            }
+          } catch (e) { console.warn("[audio transcribe]", e); }
+        }
+      }
+
       // Save inbound message
       const displayText = msg.interactivePayload
         ? `[${msg.interactivePayload.title}]`
-        : (msg.text || `[${msg.type}]`);
+        : (transcribedText || `[${msg.type}]`);
 
       const inbound = await createMessage({
         conversationId: conversation.id,
@@ -197,8 +213,9 @@ export async function POST(req: NextRequest) {
 
       const aiConfig = await getAIConfig() as Record<string, unknown>;
 
-      // Extract keywords and search relevant products
-      const keywords = extractKeywords(msg.text);
+      // Extract keywords and search relevant products (use transcribed text for audio)
+      const textForSearch = transcribedText || msg.text;
+      const keywords = extractKeywords(textForSearch);
       let relevantProducts: MongoProduct[] = [];
       if (keywords.length > 0) {
         try {

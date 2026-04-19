@@ -164,6 +164,24 @@ export interface WAListSection {
   rows: { id: string; title: string; description?: string }[];
 }
 
+export async function downloadWAMedia(mediaId: string, accessToken: string): Promise<{ buffer: Buffer; mime: string } | null> {
+  try {
+    // 1. Get media URL
+    const { data: meta } = await axios.get(`${WA_API_BASE}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    // 2. Download file
+    const { data, headers } = await axios.get(meta.url, {
+      responseType: "arraybuffer",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    return { buffer: Buffer.from(data), mime: (headers["content-type"] as string) ?? "audio/ogg" };
+  } catch (e) {
+    console.error("[downloadWAMedia]", e);
+    return null;
+  }
+}
+
 export function parseIncomingWebhook(body: WAWebhookBody): ParsedWAMessage[] {
   const messages: ParsedWAMessage[] = [];
 
@@ -195,14 +213,14 @@ export function parseIncomingWebhook(body: WAWebhookBody): ParsedWAMessage[] {
       }
 
       messages.push({
-        messageId: msg.id,
-        from: msg.from,
-        contactName: contact?.profile?.name ?? msg.from,
-        timestamp: new Date(parseInt(msg.timestamp) * 1000),
-        type: msg.type,
+        messageId:        msg.id,
+        from:             msg.from,
+        contactName:      contact?.profile?.name ?? msg.from,
+        timestamp:        new Date(parseInt(msg.timestamp) * 1000),
+        type:             msg.type,
         text,
         interactivePayload,
-        rawMessage: msg,
+        rawMessage:       msg,
       });
     }
   } catch {
