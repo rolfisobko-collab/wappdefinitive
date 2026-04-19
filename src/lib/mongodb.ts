@@ -77,22 +77,42 @@ const SYNONYMS: Record<string, string[]> = {
   lcd:         ["pantalla", "display"],
 };
 
+// Strip common Spanish plural suffixes to normalize: "modulos" → "modulo", "baterias" → "bateria"
+function singularize(word: string): string {
+  if (word.length > 5 && word.endsWith("es")) return word.slice(0, -2);
+  if (word.length > 4 && word.endsWith("s"))  return word.slice(0, -1);
+  return word;
+}
+
 export function expandKeywords(keywords: string[]): string[] {
   const expanded = new Set<string>();
   for (const kw of keywords) {
-    const norm = stripAccents(kw);
+    const norm     = stripAccents(kw);
+    const singular = singularize(norm);
     expanded.add(norm);
-    for (const s of SYNONYMS[norm] ?? []) expanded.add(stripAccents(s));
+    if (singular !== norm) expanded.add(singular);
+    // Synonyms for both plural and singular forms
+    for (const s of SYNONYMS[norm]     ?? []) expanded.add(stripAccents(s));
+    for (const s of SYNONYMS[singular] ?? []) expanded.add(stripAccents(s));
   }
   return Array.from(expanded);
 }
 
-// Build OR regex filter using accent-insensitive patterns
+// AND search: all keywords must appear in the product name
 export function buildSearchFilter(keywords: string[]): Record<string, unknown> {
-  const patterns = keywords.map((k) => ({
-    name: { $regex: accentRegex(k), $options: "i" },
-  }));
-  return { $or: patterns };
+  if (keywords.length === 1) {
+    return { name: { $regex: accentRegex(keywords[0]), $options: "i" } };
+  }
+  return {
+    $and: keywords.map((k) => ({ name: { $regex: accentRegex(k), $options: "i" } })),
+  };
+}
+
+// OR fallback: at least one keyword must appear
+export function buildSearchFilterOr(keywords: string[]): Record<string, unknown> {
+  return {
+    $or: keywords.map((k) => ({ name: { $regex: accentRegex(k), $options: "i" } })),
+  };
 }
 
 // ─── Order creation ──────────────────────────────────────────────────────────
@@ -235,9 +255,9 @@ export async function getMongoProducts(opts: {
     const rawKeywords = opts.keywords ?? (opts.search ? [opts.search] : []);
     const expanded    = expandKeywords(rawKeywords);
 
-    // Try text index first (best relevance)
+    // 1. Text index with forced AND ("+" prefix on each term)
     try {
-      const textSearch = expanded.join(" ");
+      const textSearch = expanded.map((k) => `+${k}`).join(" ");
       const textFilter = { ...baseFilter, $text: { $search: textSearch } };
       raw = await db.collection("stock")
         .find(textFilter, { projection: { score: { $meta: "textScore" } } })
@@ -248,9 +268,15 @@ export async function getMongoProducts(opts: {
       raw = [];
     }
 
-    // Fallback: accent-insensitive OR regex if text search returned < 2
+    // 2. AND regex fallback (all keywords must appear in the name)
     if (raw.length < 2) {
-      const orFilter = { ...baseFilter, ...buildSearchFilter(expanded) };
+      const andFilter = { ...baseFilter, ...buildSearchFilter(expanded) };
+      raw = await db.collection("stock").find(andFilter).limit(opts.limit ?? 10).toArray();
+    }
+
+    // 3. OR regex fallback (at least one keyword matches) — last resort
+    if (raw.length === 0) {
+      const orFilter = { ...baseFilter, ...buildSearchFilterOr(expanded) };
       raw = await db.collection("stock").find(orFilter).limit(opts.limit ?? 10).toArray();
     }
   } else {
