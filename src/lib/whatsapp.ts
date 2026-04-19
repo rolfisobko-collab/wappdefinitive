@@ -68,6 +68,67 @@ export function getWAClient(phoneNumberId: string, accessToken: string) {
       return res.data;
     },
 
+    async sendProductCard(
+      to: string,
+      imageUrl: string | null,
+      bodyText: string,
+      buttons: { id: string; title: string }[]
+    ) {
+      const safeButtons = buttons.slice(0, 3).map((b) => ({
+        type: "reply",
+        reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
+      }));
+
+      if (imageUrl) {
+        const res = await client.post("/messages", {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to,
+          type: "interactive",
+          interactive: {
+            type: "button",
+            header: { type: "image", image: { link: imageUrl } },
+            body: { text: bodyText.slice(0, 1024) },
+            action: { buttons: safeButtons },
+          },
+        });
+        return res.data;
+      } else {
+        const res = await client.post("/messages", {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to,
+          type: "interactive",
+          interactive: {
+            type: "button",
+            body: { text: bodyText.slice(0, 1024) },
+            action: { buttons: safeButtons },
+          },
+        });
+        return res.data;
+      }
+    },
+
+    async sendButtons(to: string, bodyText: string, buttons: { id: string; title: string }[]) {
+      const res = await client.post("/messages", {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: bodyText.slice(0, 1024) },
+          action: {
+            buttons: buttons.slice(0, 3).map((b) => ({
+              type: "reply",
+              reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
+            })),
+          },
+        },
+      });
+      return res.data;
+    },
+
     async markAsRead(messageId: string) {
       const res = await client.post("/messages", {
         messaging_product: "whatsapp",
@@ -115,13 +176,32 @@ export function parseIncomingWebhook(body: WAWebhookBody): ParsedWAMessage[] {
 
     for (const msg of value.messages) {
       const contact = value.contacts?.find((c: WAContact) => c.wa_id === msg.from);
+
+      let text = msg.text?.body ?? "";
+      let interactivePayload: { type: string; id: string; title: string } | null = null;
+
+      if (msg.type === "interactive") {
+        const interactive = msg.interactive as Record<string, unknown>;
+        const iType = interactive?.type as string;
+        if (iType === "button_reply") {
+          const reply = interactive.button_reply as Record<string, string>;
+          text = reply?.title ?? "";
+          interactivePayload = { type: "button_reply", id: reply?.id ?? "", title: reply?.title ?? "" };
+        } else if (iType === "list_reply") {
+          const reply = interactive.list_reply as Record<string, string>;
+          text = reply?.title ?? "";
+          interactivePayload = { type: "list_reply", id: reply?.id ?? "", title: reply?.title ?? "" };
+        }
+      }
+
       messages.push({
         messageId: msg.id,
         from: msg.from,
         contactName: contact?.profile?.name ?? msg.from,
         timestamp: new Date(parseInt(msg.timestamp) * 1000),
         type: msg.type,
-        text: msg.text?.body ?? "",
+        text,
+        interactivePayload,
         rawMessage: msg,
       });
     }
@@ -139,6 +219,7 @@ export interface ParsedWAMessage {
   timestamp: Date;
   type: string;
   text: string;
+  interactivePayload: { type: string; id: string; title: string } | null;
   rawMessage: object;
 }
 

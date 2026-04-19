@@ -14,8 +14,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ convers
 export async function POST(req: Request, { params }: { params: Promise<{ conversationId: string }> }) {
   try {
     const { conversationId } = await params;
-    const { productId, quantity = 1 } = await req.json();
-    return NextResponse.json(await addToCart(conversationId, productId, quantity));
+    const body = await req.json();
+    // Accept MongoDB product data
+    const product = {
+      mongoProductId: body.mongoProductId ?? body.productId,
+      name:           body.name ?? "Producto",
+      image:          body.image ?? null,
+      unitPriceUSD:   body.unitPriceUSD ?? body.price ?? 0,
+      unitPriceARS:   body.unitPriceARS ?? 0,
+    };
+    return NextResponse.json(await addToCart(conversationId, product, body.quantity ?? 1));
   } catch (error) {
     console.error("[POST /api/cart]", error);
     return NextResponse.json({ error: "Error" }, { status: 500 });

@@ -37,8 +37,41 @@ export interface MongoProduct {
   liquidation: boolean;
 }
 
+export async function getMongoProductById(id: string): Promise<MongoProduct | null> {
+  const db = await getMongoDB();
+  const rateDoc = await db.collection("exchangeRates").findOne({ _id: "USD_ARS" } as object);
+  const usdToArs: number = (rateDoc as Record<string, unknown> | null)?.rate as number ?? 1500;
+  const catDocs = await db.collection("stockCategories").find({}).toArray();
+  const catMap: Record<string, string> = {};
+  for (const c of catDocs) catMap[c._id as string] = c.name as string;
+
+  const p = await db.collection("stock").findOne({ _id: id } as object);
+  if (!p) return null;
+  const price = (p.price as number) ?? 0;
+  const promoPrice = (p.promoPrice as number | null) ?? null;
+  return {
+    id: p._id as string,
+    name: p.name as string,
+    price, priceARS: Math.round(price * usdToArs),
+    promoPrice, promoPriceARS: promoPrice ? Math.round(promoPrice * usdToArs) : null,
+    currency: "USD", usdToArs,
+    image: ((p.images as string[] | undefined)?.[0]) || (p.image1 as string | null) || null,
+    images: ((p.images as string[] | undefined) ?? []).filter(Boolean),
+    stock: (p.quantity as number) ?? 0,
+    available: ((p.quantity as number) ?? 0) > 0,
+    category: catMap[p.category as string] ?? null,
+    categoryId: (p.category as string) ?? null,
+    sku: (p.sku as number) ?? null,
+    description: ((p.description as string) || "").slice(0, 300),
+    location: (p.location as string) ?? null,
+    weeklyOffer: (p.weeklyOffer as boolean) ?? false,
+    liquidation: (p.liquidation as boolean) ?? false,
+  };
+}
+
 export async function getMongoProducts(opts: {
   search?: string;
+  keywords?: string[];
   categoryId?: string;
   limit?: number;
   onlyAvailable?: boolean;
@@ -64,7 +97,14 @@ export async function getMongoProducts(opts: {
     isActive: { $ne: false },
     price: { $gt: 0 },
   };
-  if (opts.search) filter.name = { $regex: opts.search, $options: "i" };
+
+  // Keyword OR search (most specific)
+  if (opts.keywords?.length) {
+    filter.$or = opts.keywords.map((k) => ({ name: { $regex: k, $options: "i" } }));
+  } else if (opts.search) {
+    filter.name = { $regex: opts.search, $options: "i" };
+  }
+
   if (opts.categoryId) filter.category = opts.categoryId;
   if (opts.onlyAvailable) filter.quantity = { $gt: 0 };
 

@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useChatStore } from "@/store/chatStore";
-import { Message, Product, Cart, ConversationListItem } from "@/lib/types";
+import { Message, ConversationListItem } from "@/lib/types";
+import { CartMongoItem } from "@/lib/db";
 import { ChatHeader } from "./ChatHeader";
 import { ChatInput } from "./ChatInput";
 import { MessageBubble, TypingIndicator, DateSeparator } from "./MessageBubble";
@@ -10,6 +11,9 @@ import { CartPanel } from "./CartPanel";
 import { getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
 import { format, isToday, isYesterday } from "date-fns";
+
+function fUSD(n: number) { return `USD ${n.toFixed(0)}`; }
+function fARS(n: number) { return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n); }
 import { es } from "date-fns/locale";
 import { ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,7 +30,6 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
   const [isTyping, setIsTyping]   = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [showCart, setShowCart]   = useState(false);
-  const [products, setProducts]   = useState<Product[]>([]);
   const bottomRef  = useRef<HTMLDivElement>(null);
 
   const conversation = conversations.find((c) => c.id === conversationId);
@@ -45,9 +48,6 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
       .catch(() => toast("Error al cargar mensajes", "error"));
   }, [conversationId]);
 
-  useEffect(() => {
-    fetch("/api/products?active=true").then((r) => r.json()).then(setProducts).catch(() => {});
-  }, []);
 
   useEffect(() => {
     const socket = getSocket();
@@ -138,33 +138,14 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
     toast("Conversación resuelta", "success");
   };
 
-  const handleAddToCart = async (productId: string) => {
-    const res = await fetch(`/api/cart/${conversationId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productId, quantity: 1 }),
-    });
-    setCart(conversationId, await res.json());
-    toast("Producto agregado", "success");
-  };
-
-  const handleRemoveFromCart = async (itemId: string) => {
-    const res = await fetch(`/api/cart/${conversationId}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ itemId }),
-    });
-    setCart(conversationId, await res.json());
-  };
-
   const handleSendCart = async () => {
-    if (!cart?.items.length) return;
-    const lines = cart.items
-      .map((i) => `• ${i.product.name} × ${i.quantity} = $${(i.unitPrice * i.quantity).toLocaleString("es-AR")}`)
-      .join("\n");
-    const total = cart.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
-    await handleSend(`🛒 *Tu carrito de compras:*\n\n${lines}\n\n*Total: $${total.toLocaleString("es-AR")} ARS*\n\n¿Confirmás el pedido?`);
-    toast("Carrito enviado al cliente", "success");
+    const items = (cart as { items?: CartMongoItem[] } | null)?.items ?? [];
+    if (!items.length) return;
+    const lines = items.map((i) => `• ${i.name} × ${i.quantity} = ${fUSD(i.unitPriceUSD * i.quantity)} | ${fARS(i.unitPriceARS * i.quantity)}`).join("\n");
+    const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
+    const totalARS = items.reduce((s, i) => s + i.unitPriceARS * i.quantity, 0);
+    await handleSend(`🛒 *Tu carrito:*\n\n${lines}\n\n*Total: ${fUSD(totalUSD)} | ${fARS(totalARS)}*\n\n¿Confirmás el pedido?`);
+    toast("Carrito enviado al cliente ✓", "success");
   };
 
   // Group messages by date
@@ -232,11 +213,9 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
 
       {showCart && (
         <CartPanel
-          cart={cart}
-          products={products}
+          cart={cart as { id: string; items: CartMongoItem[] } | null}
           conversationId={conversationId}
-          onAddProduct={handleAddToCart}
-          onRemoveItem={handleRemoveFromCart}
+          onCartChange={(c) => setCart(conversationId, c as never)}
           onSendCart={handleSendCart}
           onClose={() => setShowCart(false)}
         />

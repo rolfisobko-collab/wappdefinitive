@@ -41,14 +41,30 @@ export async function generateAIResponse(
   temperature = 0.7,
   maxTokens = 500,
   includeProducts = true,
-  customApiKey?: string | null
+  customApiKey?: string | null,
+  relevantProducts?: MongoProduct[]
 ): Promise<string> {
   const groq = new Groq({ apiKey: customApiKey || GROQ_API_KEY });
 
   let prompt = systemPrompt;
 
   if (includeProducts) {
-    prompt += await buildProductCatalogContext();
+    if (relevantProducts && relevantProducts.length > 0) {
+      // Use pre-searched products (faster, more relevant)
+      const { usdToArs } = relevantProducts[0] ? { usdToArs: relevantProducts[0].usdToArs } : { usdToArs: 1500 };
+      const lines = relevantProducts.map((p: MongoProduct) => {
+        const stockLabel = p.available ? `Stock: ${p.stock}` : "SIN STOCK";
+        const price = p.promoPrice
+          ? `USD ${p.promoPrice} (oferta) / ARS ${p.promoPriceARS?.toLocaleString("es-AR")}`
+          : `USD ${p.price} / ARS ${p.priceARS.toLocaleString("es-AR")}`;
+        const cat = p.category ? ` [${p.category}]` : "";
+        return `- ${p.name}${cat} | ${price} | ${stockLabel}`;
+      });
+      prompt += `\n\n--- PRODUCTOS ENCONTRADOS (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN ---\nMencioná estos productos en tu respuesta con sus precios en USD y ARS.`;
+    } else {
+      // No specific products found — use general catalog
+      prompt += await buildProductCatalogContext();
+    }
   }
 
   const completion = await groq.chat.completions.create({

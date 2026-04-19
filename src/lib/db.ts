@@ -256,6 +256,29 @@ export async function saveWAConfig(data: Record<string, unknown>) {
 
 // ─── CART ──────────────────────────────────────────────────────────────────
 
+export interface CartMongoItem {
+  id: string;
+  cartId: string;
+  mongoProductId: string;
+  name: string;
+  image: string | null;
+  unitPriceUSD: number;
+  unitPriceARS: number;
+  quantity: number;
+}
+
+async function getOrCreateCart(conversationId: string): Promise<string> {
+  const q = query(collection(db, "carts"), where("conversationId", "==", conversationId), limit(1));
+  const snap = await getDocs(q);
+  if (!snap.empty) return snap.docs[0].id;
+  const cartId = uuid();
+  await setDoc(doc(db, "carts", cartId), {
+    conversationId, status: "active",
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  });
+  return cartId;
+}
+
 export async function getCart(conversationId: string) {
   const q = query(collection(db, "carts"), where("conversationId", "==", conversationId), limit(1));
   const snap = await getDocs(q);
@@ -266,56 +289,50 @@ export async function getCart(conversationId: string) {
   const itemsSnap = await getDocs(
     query(collection(db, "cartItems"), where("cartId", "==", cartDoc.id))
   );
-  const items = await Promise.all(itemsSnap.docs.map(async (itemDoc) => {
-    const item = itemDoc.data();
-    const product = await getProduct(item.productId);
-    return { id: itemDoc.id, ...item, product };
+  const items: CartMongoItem[] = itemsSnap.docs.map((d) => ({
+    id: d.id,
+    cartId: cartDoc.id,
+    mongoProductId: d.data().mongoProductId ?? d.data().productId ?? "",
+    name: d.data().name ?? "Producto",
+    image: d.data().image ?? null,
+    unitPriceUSD: d.data().unitPriceUSD ?? d.data().unitPrice ?? 0,
+    unitPriceARS: d.data().unitPriceARS ?? 0,
+    quantity: d.data().quantity ?? 1,
   }));
 
   return {
-    id: cartDoc.id, ...cartData,
-    items,
+    id: cartDoc.id, ...cartData, items,
     createdAt: toDate(cartData.createdAt),
     updatedAt: toDate(cartData.updatedAt),
   };
 }
 
-export async function addToCart(conversationId: string, productId: string, quantity = 1) {
-  const product = await getProduct(productId);
-  if (!product) throw new Error("Producto no encontrado");
+export async function addToCart(
+  conversationId: string,
+  product: { mongoProductId: string; name: string; image: string | null; unitPriceUSD: number; unitPriceARS: number },
+  quantity = 1
+) {
+  const cartId = await getOrCreateCart(conversationId);
 
-  // Get or create cart
-  let cartId: string;
-  const cartQuery = query(collection(db, "carts"), where("conversationId", "==", conversationId), limit(1));
-  const cartSnap = await getDocs(cartQuery);
-
-  if (cartSnap.empty) {
-    cartId = uuid();
-    await setDoc(doc(db, "carts", cartId), {
-      conversationId, status: "active",
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    });
-  } else {
-    cartId = cartSnap.docs[0].id;
-  }
-
-  // Check if item exists
   const existingQ = query(
     collection(db, "cartItems"),
     where("cartId", "==", cartId),
-    where("productId", "==", productId),
+    where("mongoProductId", "==", product.mongoProductId),
     limit(1)
   );
   const existingSnap = await getDocs(existingQ);
 
   if (!existingSnap.empty) {
-    const existing = existingSnap.docs[0];
-    await updateDoc(existing.ref, { quantity: (existing.data().quantity ?? 1) + quantity });
+    await updateDoc(existingSnap.docs[0].ref, { quantity: (existingSnap.docs[0].data().quantity ?? 1) + quantity });
   } else {
-    const itemId = uuid();
-    await setDoc(doc(db, "cartItems", itemId), {
-      cartId, productId, quantity,
-      unitPrice: (product as Record<string, unknown>).price,
+    await setDoc(doc(db, "cartItems", uuid()), {
+      cartId,
+      mongoProductId: product.mongoProductId,
+      name: product.name,
+      image: product.image,
+      unitPriceUSD: product.unitPriceUSD,
+      unitPriceARS: product.unitPriceARS,
+      quantity,
     });
   }
 
