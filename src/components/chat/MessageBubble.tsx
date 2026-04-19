@@ -70,7 +70,7 @@ export function AudioPlayer({ mediaId }: { mediaId: string }) {
     a.currentTime = ratio * a.duration;
   }
 
-  const fmt = (s: number) => isNaN(s) ? "0:00" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  const fmt = (s: number) => (!isFinite(s) || isNaN(s)) ? "0:00" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
   return (
     <div className="flex items-center gap-2 min-w-[200px]">
