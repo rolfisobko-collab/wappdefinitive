@@ -35,45 +35,46 @@ function accentRegex(term: string): string {
     .replace(/[nñ]/gi, "[nñNÑ]");
 }
 
+// IMPORTANTE: "módulo" en esta BD = ensamble pantalla+táctil completo (NO es sinónimo genérico)
+// Cada término apunta a sus propios sinónimos SIN cruzar con módulo
 const SYNONYMS: Record<string, string[]> = {
-  // Pantallas / módulos (la misma cosa en telefonía)
-  modulo:      ["pantalla", "display", "lcd", "tactil", "tela", "módulo", "módulos", "modulos"],
-  modulos:     ["pantalla", "display", "lcd", "tactil", "tela", "módulo", "módulos", "modulo"],
-  pantalla:    ["display", "lcd", "tactil", "tela", "vidrio", "screen", "modulo", "módulo"],
-  display:     ["pantalla", "lcd", "tactil", "tela", "screen", "modulo", "módulo"],
-  lcd:         ["pantalla", "display", "tactil", "modulo"],
   // Baterías
-  bateria:     ["battery", "pila", "batería", "bat"],
-  battery:     ["bateria", "pila", "batería"],
+  bateria:     ["battery", "pila"],
+  battery:     ["bateria", "pila"],
   // Placas
   placa:       ["board", "motherboard", "madre", "pcb"],
   board:       ["placa", "motherboard", "madre"],
   // Cámaras
-  camara:      ["camera", "lente", "sensor", "foto"],
+  camara:      ["camera", "lente", "sensor"],
   camera:      ["camara", "lente", "sensor"],
   // Flex / FPC
   flex:        ["fpc", "ribbon"],
   fpc:         ["flex", "ribbon"],
-  // Cargadores
-  cargador:    ["charger", "pin carga", "usb", "dock", "conector"],
+  // Cargadores / conectores
+  cargador:    ["charger", "pin carga", "dock"],
   charger:     ["cargador", "pin carga"],
+  conector:    ["puerto", "pin", "dock", "jack"],
   // Audio
   auricular:   ["earpiece", "parlante", "altavoz", "bocina"],
-  parlante:    ["auricular", "earpiece", "bocina", "altavoz"],
-  // Touch / táctil
-  tactil:      ["touch", "pantalla", "vidrio", "modulo"],
-  touch:       ["tactil", "pantalla", "vidrio"],
+  parlante:    ["auricular", "earpiece", "bocina"],
+  bocina:      ["parlante", "auricular", "earpiece"],
+  // Touch / táctil (distinto de módulo)
+  tactil:      ["touch", "vidrio"],
+  touch:       ["tactil", "vidrio"],
   // Micrófonos
-  microfono:   ["mic", "micrófono"],
+  microfono:   ["mic"],
   // Tapas / carcasas
-  tapa:        ["back cover", "back glass", "contratapa", "carcasa"],
+  tapa:        ["back cover", "contratapa", "carcasa"],
   carcasa:     ["tapa", "cover", "marco"],
   // Botones
-  encendido:   ["power", "boton power"],
-  volumen:     ["volume", "boton volumen"],
-  // Conectores
-  conector:    ["puerto", "pin", "dock", "jack", "cargador"],
+  encendido:   ["power"],
+  volumen:     ["volume"],
+  // Vibrador
   vibrador:    ["vibration", "motor vibracion"],
+  // Display / pantalla (SIN módulo — son distintos en esta BD)
+  display:     ["pantalla", "lcd"],
+  pantalla:    ["display", "lcd"],
+  lcd:         ["pantalla", "display"],
 };
 
 export function expandKeywords(keywords: string[]): string[] {
