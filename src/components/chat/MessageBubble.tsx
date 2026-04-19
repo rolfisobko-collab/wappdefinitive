@@ -35,7 +35,7 @@ function WAText({ text }: { text: string }) {
   return <>{segments}</>;
 }
 
-function AudioPlayer({ mediaId }: { mediaId: string }) {
+export function AudioPlayer({ mediaId }: { mediaId: string }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);

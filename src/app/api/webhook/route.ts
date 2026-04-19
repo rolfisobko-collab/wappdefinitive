@@ -156,13 +156,14 @@ export async function POST(req: NextRequest) {
           try {
             const product: MongoProduct | null = await getMongoProductById(mongoId);
             if (product) {
-              await addToCart(conversation.id, {
+              const updatedCart = await addToCart(conversation.id, {
                 mongoProductId: product.id,
                 name:           product.name,
                 image:          product.image,
                 unitPriceUSD:   product.promoPrice ?? product.price,
                 unitPriceARS:   product.promoPriceARS ?? product.priceARS,
               });
+              io?.to(`conversation:${conversation.id}`).emit("cart-updated", { conversationId: conversation.id, cart: updatedCart });
               const confirmText = `✅ *${product.name}* agregado al carrito!\n💵 USD ${product.promoPrice ?? product.price} | ARS ${(product.promoPriceARS ?? product.priceARS).toLocaleString("es-AR")}`;
               await wa.sendButtons(contact.phone, confirmText, [
                 { id: "cart_view",    title: "🛒 Ver carrito" },
@@ -322,6 +323,7 @@ export async function POST(req: NextRequest) {
         // CLEAR CART
         if (buttonId === "cart_clear") {
           await removeFromCart(conversation.id);
+          io?.to(`conversation:${conversation.id}`).emit("cart-updated", { conversationId: conversation.id, cart: null });
           await wa.sendTextMessage(contact.phone, "🗑️ Carrito vaciado. ¿En qué más te puedo ayudar?");
           continue;
         }
@@ -382,8 +384,19 @@ export async function POST(req: NextRequest) {
         // Send via WhatsApp (fire and forget — errors don't block UI update)
         if (waConfig?.phoneNumberId && waConfig?.accessToken) {
           const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
-          try { await wa.sendTextMessage(contact.phone, aiText); }
-          catch (e) { console.error("[WA sendText]", e); }
+          // Add "Ver carrito" button if cart has items
+          try {
+            const cartCheck = await getCart(conversation.id);
+            const cartHasItems = ((cartCheck as Record<string,unknown>)?.items as unknown[] | undefined)?.length ?? 0;
+            if (cartHasItems > 0) {
+              await wa.sendButtons(contact.phone, aiText, [{ id: "cart_view", title: "🛒 Ver carrito" }]);
+            } else {
+              await wa.sendTextMessage(contact.phone, aiText);
+            }
+          } catch (e) {
+            console.error("[WA sendText]", e);
+            try { await wa.sendTextMessage(contact.phone, aiText); } catch { /* ignore */ }
+          }
 
           // Product cards (max 3)
           if (relevantProducts.length > 0) {

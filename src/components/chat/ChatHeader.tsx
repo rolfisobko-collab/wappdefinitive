@@ -2,7 +2,7 @@
 
 import { ConversationListItem } from "@/lib/types";
 import { Avatar } from "@/components/ui/Avatar";
-import { Bot, Search, MoreVertical, PauseCircle, Play, UserCheck, ArrowLeft } from "lucide-react";
+import { Bot, Paperclip, MoreVertical, PauseCircle, Play, UserCheck, ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
@@ -12,9 +12,11 @@ interface ChatHeaderProps {
   onTogglePause: () => void;
   onResolve: () => void;
   onBack?: () => void;
+  onToggleMedia?: () => void;
+  showMedia?: boolean;
 }
 
-export function ChatHeader({ conversation, onToggleAI, onTogglePause, onResolve, onBack }: ChatHeaderProps) {
+export function ChatHeader({ conversation, onToggleAI, onTogglePause, onResolve, onBack, onToggleMedia, showMedia }: ChatHeaderProps) {
   const [showMenu, setShowMenu] = useState(false);
   const { contact, aiEnabled, aiPaused } = conversation;
   const name = contact.name ?? contact.phone;
@@ -85,9 +87,20 @@ export function ChatHeader({ conversation, onToggleAI, onTogglePause, onResolve,
           </button>
         )}
 
-        <button className="p-2 text-[#54656f] hover:text-[#111b21] rounded-full hover:bg-[#e9edef] transition-colors ml-0.5">
-          <Search className="w-5 h-5" />
-        </button>
+        {onToggleMedia && (
+          <button
+            onClick={onToggleMedia}
+            title="Archivos del chat"
+            className={cn(
+              "p-2 rounded-full transition-colors ml-0.5",
+              showMedia
+                ? "text-[#008069] bg-[#e9edef]"
+                : "text-[#54656f] hover:text-[#111b21] hover:bg-[#e9edef]"
+            )}
+          >
+            <Paperclip className="w-5 h-5" />
+          </button>
+        )}
 
         {/* More menu */}
         <div className="relative">

@@ -8,6 +8,7 @@ import { ChatHeader } from "./ChatHeader";
 import { ChatInput } from "./ChatInput";
 import { MessageBubble, TypingIndicator, DateSeparator } from "./MessageBubble";
 import { CartPanel } from "./CartPanel";
+import { MediaPanel } from "./MediaPanel";
 import { getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
 import { format, isToday, isYesterday } from "date-fns";
@@ -30,6 +31,7 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
   const [isTyping, setIsTyping]   = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [showCart, setShowCart]   = useState(false);
+  const [showMedia, setShowMedia] = useState(false);
   const bottomRef  = useRef<HTMLDivElement>(null);
 
   const conversation = conversations.find((c) => c.id === conversationId);
@@ -65,10 +67,16 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
       addMessage(conversationId, message);
     });
 
+    socket.on("cart-updated", ({ conversationId: cid, cart: updatedCart }: { conversationId: string; cart: unknown }) => {
+      if (cid !== conversationId) return;
+      setCart(conversationId, updatedCart as never);
+    });
+
     return () => {
       socket.emit("leave-conversation", conversationId);
       socket.off("new-message");
       socket.off("ai-response");
+      socket.off("cart-updated");
     };
   }, [conversationId]);
 
@@ -171,6 +179,8 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
           onTogglePause={handleTogglePause}
           onResolve={handleResolve}
           onBack={onBack}
+          onToggleMedia={() => { setShowMedia(!showMedia); setShowCart(false); }}
+          showMedia={showMedia}
         />
 
         {/* Messages */}
@@ -190,7 +200,7 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
         {/* Cart FAB */}
         <div className="relative">
           <button
-            onClick={() => setShowCart(!showCart)}
+            onClick={() => { setShowCart(!showCart); setShowMedia(false); }}
             className={cn(
               "absolute -top-14 right-4 flex items-center gap-2 px-3 py-2 rounded-full text-sm font-semibold shadow-md transition-all",
               cartItemCount > 0
@@ -218,6 +228,13 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
           onCartChange={(c) => setCart(conversationId, c as never)}
           onSendCart={handleSendCart}
           onClose={() => setShowCart(false)}
+        />
+      )}
+
+      {showMedia && (
+        <MediaPanel
+          messages={convMessages}
+          onClose={() => setShowMedia(false)}
         />
       )}
     </div>
