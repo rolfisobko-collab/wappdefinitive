@@ -283,7 +283,7 @@ export async function POST(req: NextRequest) {
                 `📦 *${product.name}*\n` +
                 (product.category ? `🏷️ ${product.category}\n` : "") +
                 `💵 USD ${product.promoPrice ?? product.price}${product.promoPrice ? ` ~~${product.price}~~` : ""} | ARS ${(product.promoPriceARS ?? product.priceARS).toLocaleString("es-AR")}\n` +
-                (product.available ? `✅ En stock (${product.stock} unidades)` : `❌ Sin stock`);
+                (product.available ? `✅ Disponible` : `❌ Sin stock`);
 
               const cardButtons = product.available
                 ? [{ id: `cart_add_${product.id}`, title: "🛒 Agregar" }, { id: "cart_view", title: "Ver carrito" }]

@@ -76,7 +76,7 @@ export async function generateAIResponse(
       // Use pre-searched products (faster, more relevant)
       const { usdToArs } = relevantProducts[0] ? { usdToArs: relevantProducts[0].usdToArs } : { usdToArs: 1500 };
       const lines = relevantProducts.map((p: MongoProduct) => {
-        const stockLabel = p.available ? `Stock: ${p.stock}` : "SIN STOCK";
+        const stockLabel = p.available ? "DISPONIBLE" : "SIN STOCK";
         const price = p.promoPrice
           ? `USD ${p.promoPrice} (oferta) / ARS ${p.promoPriceARS?.toLocaleString("es-AR")}`
           : `USD ${p.price} / ARS ${p.priceARS.toLocaleString("es-AR")}`;
