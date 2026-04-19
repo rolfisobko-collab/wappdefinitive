@@ -12,6 +12,7 @@ interface MessageBubbleProps {
 
 // WhatsApp text formatter: *bold*, _italic_, ~strike~
 function WAText({ text }: { text: string }) {
+  if (!text) return null;
   const segments: React.ReactNode[] = [];
   const regex = /(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~)/g;
   let lastIdx = 0;

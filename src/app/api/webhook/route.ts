@@ -145,8 +145,8 @@ export async function POST(req: NextRequest) {
         } catch { /* ignore */ }
       }
 
-      // ── Handle interactive button replies (cart actions) ──────────────────
-      if (msg.interactivePayload?.type === "button_reply" && waConfig?.phoneNumberId && waConfig?.accessToken) {
+      // ── Handle interactive replies (button_reply and list_reply) ─────────
+      if (msg.interactivePayload && waConfig?.phoneNumberId && waConfig?.accessToken) {
         const buttonId = msg.interactivePayload.id;
         const wa       = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
 
