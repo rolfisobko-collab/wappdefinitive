@@ -376,11 +376,16 @@ export async function POST(req: NextRequest) {
           direction: "outbound", sender: "ai", status: "sent", content: aiText,
         });
 
+        // Emit to UI immediately — before WA send so it always shows even if WA fails
+        io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: aiMsg });
+
+        // Send via WhatsApp (fire and forget — errors don't block UI update)
         if (waConfig?.phoneNumberId && waConfig?.accessToken) {
           const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
-          await wa.sendTextMessage(contact.phone, aiText);
+          try { await wa.sendTextMessage(contact.phone, aiText); }
+          catch (e) { console.error("[WA sendText]", e); }
 
-          // Send product cards (max 3) if relevant products found
+          // Product cards (max 3)
           if (relevantProducts.length > 0) {
             for (const product of relevantProducts.slice(0, 3)) {
               const caption =
@@ -393,14 +398,11 @@ export async function POST(req: NextRequest) {
                 ? [{ id: `cart_add_${product.id}`, title: "🛒 Agregar" }, { id: "cart_view", title: "Ver carrito" }]
                 : [{ id: "catalog_more", title: "🔍 Ver más" }];
 
-              try {
-                await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
-              } catch (e) { console.warn("[sendProductCard]", e); }
+              try { await wa.sendProductCard(contact.phone, product.image, caption, cardButtons); }
+              catch (e) { console.warn("[sendProductCard]", e); }
             }
           }
         }
-
-        io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: aiMsg });
       } catch (e) { console.error("[AI Error]", e); }
     }
 
