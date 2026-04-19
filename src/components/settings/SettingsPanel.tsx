@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AIConfig, WAConfig } from "@/lib/types";
-import { Bot, Webhook, Save, ChevronDown, ChevronUp, Info, Zap, Key, CheckCircle2, Eye, EyeOff } from "lucide-react";
+import { Bot, Webhook, Save, ChevronDown, ChevronUp, Info, Zap, Key, CheckCircle2, Eye, EyeOff, User, Image } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/utils";
 
@@ -15,7 +15,9 @@ export function SettingsPanel() {
   const [loading, setLoading]   = useState(true);
   const [savingAI, setSavingAI] = useState(false);
   const [savingWA, setSavingWA] = useState(false);
-  const [open, setOpen]         = useState<"ai" | "wa" | "info" | null>("ai");
+  const [open, setOpen]         = useState<"ai" | "wa" | "profile" | "info" | null>("ai");
+  const [waProfile, setWaProfile] = useState({ about: "", profilePictureUrl: "" });
+  const [savingProfile, setSavingProfile] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -26,6 +28,30 @@ export function SettingsPanel() {
       .catch(() => toast("Error al cargar configuración", "error"))
       .finally(() => setLoading(false));
   }, []);
+
+  async function loadWAProfile() {
+    try {
+      const res = await fetch("/api/wa-profile");
+      if (!res.ok) return;
+      const d = await res.json();
+      setWaProfile({ about: d.data?.[0]?.about ?? "", profilePictureUrl: "" });
+    } catch { /* silencioso */ }
+  }
+
+  async function saveProfile() {
+    setSavingProfile(true);
+    try {
+      const res = await fetch("/api/wa-profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(waProfile),
+      });
+      if (!res.ok) throw new Error();
+      toast("Perfil de WhatsApp actualizado ✓", "success");
+      setWaProfile((p) => ({ ...p, profilePictureUrl: "" }));
+    } catch { toast("Error al actualizar perfil", "error"); }
+    finally { setSavingProfile(false); }
+  }
 
   async function saveAI() {
     if (!aiConfig) return;
@@ -71,7 +97,7 @@ export function SettingsPanel() {
     </div>
   );
 
-  const SectionBtn = ({ id, icon: Icon, title, subtitle, color }: { id: "ai"|"wa"|"info"; icon: React.ElementType; title: string; subtitle: string; color: string }) => (
+  const SectionBtn = ({ id, icon: Icon, title, subtitle, color }: { id: "ai"|"wa"|"profile"|"info"; icon: React.ElementType; title: string; subtitle: string; color: string }) => (
     <button
       onClick={() => setOpen(open === id ? null : id)}
       className="w-full flex items-center justify-between p-5 text-left hover:bg-[#f9fafb] transition-colors"
@@ -275,6 +301,85 @@ export function SettingsPanel() {
               >
                 {savingWA ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
                 Guardar WhatsApp
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ─── Perfil de WhatsApp ─── */}
+        <div className="bg-white rounded-2xl border border-[#e9edef] overflow-hidden shadow-sm">
+          <SectionBtn
+            id="profile"
+            icon={User}
+            title="Perfil de WhatsApp"
+            subtitle="Foto y descripción del número"
+            color="bg-[#f59e0b]"
+            // @ts-ignore
+            onClick={() => { if (open !== "profile") loadWAProfile(); }}
+          />
+
+          {open === "profile" && (
+            <div className="px-5 pb-5 space-y-4 border-t border-[#e9edef] pt-4">
+              <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 text-xs text-[#667781] leading-relaxed">
+                <strong className="text-[#111b21] block mb-1">💡 Nombre del número</strong>
+                El nombre que aparece en WhatsApp se cambia desde{" "}
+                <a href="https://business.facebook.com" target="_blank" rel="noopener" className="text-[#008069] hover:underline font-medium">
+                  Meta Business Manager
+                </a>{" "}
+                → Configuración de la empresa → Cuentas de WhatsApp → seleccioná el número → Editar nombre.
+              </div>
+
+              <div>
+                <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
+                  <User className="w-3 h-3" />
+                  Descripción (About / Acerca de)
+                </label>
+                <textarea
+                  value={waProfile.about}
+                  onChange={(e) => setWaProfile({ ...waProfile, about: e.target.value })}
+                  rows={2}
+                  maxLength={139}
+                  placeholder="Ej: Servicio técnico de celulares · Envíos a todo el país"
+                  className="w-full border border-[#e9edef] bg-[#f0f2f5] text-[#111b21] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#f59e0b] focus:bg-white transition-colors resize-none"
+                />
+                <p className="text-[10px] text-[#aebac1] mt-0.5 text-right">{waProfile.about.length}/139</p>
+              </div>
+
+              <div>
+                <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
+                  <Image className="w-3 h-3" />
+                  URL de foto de perfil
+                </label>
+                <input
+                  type="url"
+                  value={waProfile.profilePictureUrl}
+                  onChange={(e) => setWaProfile({ ...waProfile, profilePictureUrl: e.target.value })}
+                  placeholder="https://ejemplo.com/logo.jpg"
+                  className="w-full border border-[#e9edef] bg-[#f0f2f5] text-[#111b21] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#f59e0b] focus:bg-white transition-colors"
+                />
+                {waProfile.profilePictureUrl && (
+                  <div className="mt-2 flex items-center gap-3">
+                    <img
+                      src={waProfile.profilePictureUrl}
+                      alt="Preview"
+                      className="w-16 h-16 rounded-full object-cover border-2 border-[#e9edef]"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    <p className="text-xs text-[#667781]">Preview de la foto</p>
+                  </div>
+                )}
+                <p className="text-[10px] text-[#aebac1] mt-1">
+                  Usá una imagen cuadrada de al menos 192×192px. Se sube automáticamente a Meta al guardar.
+                </p>
+              </div>
+
+              <button
+                onClick={saveProfile}
+                disabled={savingProfile}
+                className="flex items-center gap-2 bg-[#f59e0b] hover:bg-[#d97706] text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-colors disabled:opacity-50 shadow-sm"
+              >
+                {savingProfile ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
+                Actualizar perfil
               </button>
             </div>
           )}

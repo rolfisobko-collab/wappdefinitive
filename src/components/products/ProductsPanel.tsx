@@ -1,322 +1,320 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Product } from "@/lib/types";
-import { formatCurrency } from "@/lib/utils";
-import { Plus, Pencil, Trash2, Package, ToggleLeft, ToggleRight, X } from "lucide-react";
-import { useToast } from "@/components/ui/Toast";
+import { useEffect, useState, useCallback } from "react";
+import { MongoProduct } from "@/lib/mongodb";
+import { Search, Package, RefreshCw, Tag, CheckCircle, XCircle, Zap, ShoppingBag, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/Toast";
+
+interface Category { id: string; name: string; icon?: string }
+
+interface ProductsData {
+  products: MongoProduct[];
+  categories: Category[];
+  usdToArs: number;
+}
+
+function formatARS(n: number) {
+  return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
+}
+function formatUSD(n: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+}
 
 export function ProductsPanel() {
   const { toast } = useToast();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    price: "",
-    currency: "ARS",
-    category: "",
-    sku: "",
-    stock: "",
-    imageUrl: "",
-  });
+  const [data, setData]               = useState<ProductsData | null>(null);
+  const [loading, setLoading]         = useState(true);
+  const [search, setSearch]           = useState("");
+  const [selectedCat, setSelectedCat] = useState("");
+  const [onlyAvail, setOnlyAvail]     = useState(false);
+  const [expanded, setExpanded]       = useState<string | null>(null);
 
-  useEffect(() => {
-    loadProducts();
-  }, []);
-
-  async function loadProducts() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/products");
-      const data = await res.json();
-      setProducts(data);
+      const params = new URLSearchParams();
+      if (search)       params.set("search",     search);
+      if (selectedCat)  params.set("categoryId", selectedCat);
+      if (onlyAvail)    params.set("available",  "true");
+      const res = await fetch(`/api/mongo-products?${params}`);
+      if (!res.ok) throw new Error();
+      setData(await res.json());
     } catch {
       toast("Error al cargar productos", "error");
     } finally {
       setLoading(false);
     }
-  }
+  }, [search, selectedCat, onlyAvail]);
 
-  function openCreate() {
-    setEditingProduct(null);
-    setForm({ name: "", description: "", price: "", currency: "ARS", category: "", sku: "", stock: "", imageUrl: "" });
-    setShowForm(true);
-  }
+  // Debounce search
+  useEffect(() => {
+    const t = setTimeout(load, 400);
+    return () => clearTimeout(t);
+  }, [load]);
 
-  function openEdit(product: Product) {
-    setEditingProduct(product);
-    setForm({
-      name: product.name,
-      description: product.description ?? "",
-      price: String(product.price),
-      currency: product.currency,
-      category: product.category ?? "",
-      sku: product.sku ?? "",
-      stock: String(product.stock),
-      imageUrl: product.imageUrl ?? "",
-    });
-    setShowForm(true);
-  }
-
-  async function saveProduct() {
-    if (!form.name || !form.price) {
-      toast("Nombre y precio son requeridos", "error");
-      return;
-    }
-    try {
-      const url = editingProduct ? `/api/products/${editingProduct.id}` : "/api/products";
-      const method = editingProduct ? "PATCH" : "POST";
-      const res = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      if (!res.ok) throw new Error();
-      await loadProducts();
-      setShowForm(false);
-      toast(editingProduct ? "Producto actualizado" : "Producto creado", "success");
-    } catch {
-      toast("Error al guardar producto", "error");
-    }
-  }
-
-  async function toggleActive(product: Product) {
-    try {
-      await fetch(`/api/products/${product.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active: !product.active }),
-      });
-      setProducts((prev) => prev.map((p) => (p.id === product.id ? { ...p, active: !p.active } : p)));
-    } catch {
-      toast("Error al actualizar producto", "error");
-    }
-  }
-
-  async function deleteProduct(id: string) {
-    if (!confirm("¿Eliminar este producto?")) return;
-    try {
-      await fetch(`/api/products/${id}`, { method: "DELETE" });
-      setProducts((prev) => prev.filter((p) => p.id !== id));
-      toast("Producto eliminado", "success");
-    } catch {
-      toast("Error al eliminar producto", "error");
-    }
-  }
-
-  const categories = [...new Set(products.map((p) => p.category).filter(Boolean))];
+  const products = data?.products ?? [];
+  const categories = data?.categories ?? [];
+  const usdToArs = data?.usdToArs ?? 1500;
+  const available = products.filter((p) => p.available).length;
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-xl font-bold text-[#e9edef]">Catálogo de Productos</h2>
-            <p className="text-sm text-[#8696a0] mt-0.5">
-              La IA tiene acceso a estos productos para responder a los clientes
-            </p>
+    <div className="flex-1 flex flex-col overflow-hidden bg-[#f0f2f5]">
+      {/* Header */}
+      <div className="bg-white border-b border-[#e9edef] px-5 py-4 flex-shrink-0">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-[#008069] rounded-xl flex items-center justify-center">
+              <ShoppingBag className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-[#111b21]">Catálogo de Productos</h2>
+              <p className="text-xs text-[#667781]">Sincronizado desde tu base de datos</p>
+            </div>
           </div>
           <button
-            onClick={openCreate}
-            className="flex items-center gap-2 bg-[#00a884] hover:bg-[#00c795] text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors"
+            onClick={load}
+            disabled={loading}
+            className="p-2 hover:bg-[#f0f2f5] rounded-lg transition-colors text-[#667781] disabled:opacity-40"
+            title="Recargar"
           >
-            <Plus className="w-4 h-4" />
-            Nuevo producto
+            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          {[
-            { label: "Total productos", value: products.length, color: "text-[#e9edef]" },
-            { label: "Activos", value: products.filter((p) => p.active).length, color: "text-[#00a884]" },
-            { label: "Sin stock", value: products.filter((p) => p.stock === 0).length, color: "text-[#ff9800]" },
-          ].map((stat) => (
-            <div key={stat.label} className="bg-[#202c33] rounded-xl p-4 border border-[#2a3942]">
-              <p className="text-xs text-[#8696a0] mb-1">{stat.label}</p>
-              <p className={cn("text-2xl font-bold", stat.color)}>{stat.value}</p>
+        {/* Stats row */}
+        {data && (
+          <div className="flex gap-3 mb-3 text-xs">
+            <div className="flex items-center gap-1.5 bg-[#f0f2f5] rounded-lg px-3 py-1.5">
+              <Package className="w-3.5 h-3.5 text-[#667781]" />
+              <span className="text-[#111b21] font-semibold">{products.length}</span>
+              <span className="text-[#667781]">productos</span>
             </div>
+            <div className="flex items-center gap-1.5 bg-green-50 rounded-lg px-3 py-1.5 border border-green-100">
+              <CheckCircle className="w-3.5 h-3.5 text-[#008069]" />
+              <span className="text-[#008069] font-semibold">{available}</span>
+              <span className="text-[#667781]">disponibles</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-amber-50 rounded-lg px-3 py-1.5 border border-amber-100">
+              <Zap className="w-3.5 h-3.5 text-amber-500" />
+              <span className="text-amber-700 font-semibold">1 USD = {formatARS(usdToArs)}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Search + filters */}
+        <div className="flex gap-2">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#aebac1]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar productos..."
+              className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#f0f2f5] border border-transparent text-sm text-[#111b21] placeholder-[#aebac1] outline-none focus:border-[#008069] focus:bg-white transition-colors"
+            />
+          </div>
+          <button
+            onClick={() => setOnlyAvail(!onlyAvail)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all",
+              onlyAvail
+                ? "bg-[#008069] text-white border-[#008069]"
+                : "bg-[#f0f2f5] text-[#667781] border-transparent hover:border-[#e9edef]"
+            )}
+          >
+            <Filter className="w-3.5 h-3.5" />
+            Con stock
+          </button>
+        </div>
+      </div>
+
+      {/* Category chips */}
+      {categories.length > 0 && (
+        <div className="flex gap-2 px-4 py-2.5 overflow-x-auto flex-shrink-0 bg-white border-b border-[#e9edef] scrollbar-thin">
+          <button
+            onClick={() => setSelectedCat("")}
+            className={cn(
+              "flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all",
+              selectedCat === ""
+                ? "bg-[#008069] text-white border-[#008069]"
+                : "bg-[#f0f2f5] text-[#667781] border-transparent hover:bg-[#e9edef]"
+            )}
+          >
+            Todos
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => setSelectedCat(selectedCat === cat.id ? "" : cat.id)}
+              className={cn(
+                "flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all whitespace-nowrap",
+                selectedCat === cat.id
+                  ? "bg-[#008069] text-white border-[#008069]"
+                  : "bg-[#f0f2f5] text-[#667781] border-transparent hover:bg-[#e9edef]"
+              )}
+            >
+              {cat.name}
+            </button>
           ))}
         </div>
+      )}
 
-        {/* Products grid */}
+      {/* Products grid */}
+      <div className="flex-1 overflow-y-auto p-4">
         {loading ? (
-          <div className="flex items-center justify-center h-32">
-            <div className="w-6 h-6 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {Array.from({ length: 9 }).map((_, i) => (
+              <div key={i} className="bg-white rounded-2xl border border-[#e9edef] p-4 animate-pulse">
+                <div className="w-full h-36 bg-[#f0f2f5] rounded-xl mb-3" />
+                <div className="h-4 bg-[#f0f2f5] rounded-full w-3/4 mb-2" />
+                <div className="h-3 bg-[#f0f2f5] rounded-full w-1/2" />
+              </div>
+            ))}
           </div>
         ) : products.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-[#8696a0]">
+          <div className="flex flex-col items-center justify-center h-48 text-[#667781]">
             <Package className="w-12 h-12 mb-3 opacity-30" />
-            <p className="text-sm">No hay productos todavía</p>
-            <button onClick={openCreate} className="mt-3 text-[#00a884] text-sm hover:underline">
-              Agregar el primero
-            </button>
+            <p className="text-sm font-medium">No se encontraron productos</p>
+            {search && (
+              <button onClick={() => setSearch("")} className="mt-2 text-[#008069] text-xs hover:underline">
+                Limpiar búsqueda
+              </button>
+            )}
           </div>
         ) : (
-          <div className="space-y-2">
-            {categories.length > 0 && (
-              <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
-                {categories.map((cat) => (
-                  <span key={cat} className="flex-shrink-0 px-3 py-1 bg-[#2a3942] text-[#8696a0] text-xs rounded-full">
-                    {cat}
-                  </span>
-                ))}
-              </div>
-            )}
-
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {products.map((product) => (
-              <div
+              <ProductCard
                 key={product.id}
-                className={cn(
-                  "bg-[#202c33] rounded-xl p-4 border transition-colors",
-                  product.active ? "border-[#2a3942]" : "border-[#374045] opacity-60"
-                )}
-              >
-                <div className="flex items-start gap-4">
-                  {product.imageUrl ? (
-                    <img
-                      src={product.imageUrl}
-                      alt={product.name}
-                      className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-lg bg-[#2a3942] flex items-center justify-center flex-shrink-0">
-                      <Package className="w-7 h-7 text-[#8696a0]" />
-                    </div>
-                  )}
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h3 className="font-semibold text-[#e9edef] text-sm">{product.name}</h3>
-                        {product.category && (
-                          <span className="text-xs text-[#8696a0] bg-[#2a3942] px-2 py-0.5 rounded-full">
-                            {product.category}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <button
-                          onClick={() => toggleActive(product)}
-                          className="p-1.5 text-[#8696a0] hover:text-[#e9edef] transition-colors"
-                          title={product.active ? "Desactivar" : "Activar"}
-                        >
-                          {product.active ? (
-                            <ToggleRight className="w-5 h-5 text-[#00a884]" />
-                          ) : (
-                            <ToggleLeft className="w-5 h-5" />
-                          )}
-                        </button>
-                        <button
-                          onClick={() => openEdit(product)}
-                          className="p-1.5 text-[#8696a0] hover:text-[#e9edef] transition-colors"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => deleteProduct(product.id)}
-                          className="p-1.5 text-[#8696a0] hover:text-red-400 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {product.description && (
-                      <p className="text-xs text-[#8696a0] mt-1 line-clamp-2">{product.description}</p>
-                    )}
-
-                    <div className="flex items-center gap-4 mt-2">
-                      <span className="text-base font-bold text-[#00a884]">
-                        {formatCurrency(product.price, product.currency)}
-                      </span>
-                      <span className={cn("text-xs font-medium", product.stock > 0 ? "text-[#8696a0]" : "text-[#ff9800]")}>
-                        {product.stock > 0 ? `Stock: ${product.stock}` : "Sin stock"}
-                      </span>
-                      {product.sku && (
-                        <span className="text-xs text-[#8696a0]">SKU: {product.sku}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
+                product={product}
+                expanded={expanded === product.id}
+                onToggle={() => setExpanded(expanded === product.id ? null : product.id)}
+              />
             ))}
           </div>
         )}
       </div>
+    </div>
+  );
+}
 
-      {/* Form modal */}
-      {showForm && (
-        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
-          <div className="bg-[#202c33] rounded-2xl w-full max-w-lg shadow-2xl border border-[#2a3942] max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-5 border-b border-[#2a3942]">
-              <h3 className="text-[#e9edef] font-semibold">
-                {editingProduct ? "Editar producto" : "Nuevo producto"}
-              </h3>
-              <button onClick={() => setShowForm(false)} className="text-[#8696a0] hover:text-[#e9edef]">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+function ProductCard({ product, expanded, onToggle }: {
+  product: MongoProduct;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const hasPromo = !!product.promoPrice && product.promoPrice < product.price;
 
-            <div className="p-5 space-y-4">
-              {[
-                { key: "name", label: "Nombre *", placeholder: "Ej: Remera Oversize", type: "text" },
-                { key: "description", label: "Descripción", placeholder: "Descripción del producto...", type: "text" },
-                { key: "price", label: "Precio *", placeholder: "8500", type: "number" },
-                { key: "category", label: "Categoría", placeholder: "Ej: Ropa", type: "text" },
-                { key: "sku", label: "SKU", placeholder: "Ej: REM-001", type: "text" },
-                { key: "stock", label: "Stock", placeholder: "0", type: "number" },
-                { key: "imageUrl", label: "URL de imagen", placeholder: "https://...", type: "url" },
-              ].map((field) => (
-                <div key={field.key}>
-                  <label className="text-xs text-[#8696a0] mb-1 block">{field.label}</label>
-                  <input
-                    type={field.type}
-                    placeholder={field.placeholder}
-                    value={form[field.key as keyof typeof form]}
-                    onChange={(e) => setForm((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                    className="w-full bg-[#2a3942] text-[#e9edef] rounded-lg px-3 py-2.5 text-sm outline-none placeholder-[#8696a0] focus:ring-1 focus:ring-[#00a884]"
-                  />
-                </div>
-              ))}
+  return (
+    <div
+      className={cn(
+        "bg-white rounded-2xl border transition-all duration-200 overflow-hidden cursor-pointer hover:shadow-md",
+        product.available ? "border-[#e9edef]" : "border-[#e9edef] opacity-70"
+      )}
+      onClick={onToggle}
+    >
+      {/* Image */}
+      <div className="relative w-full h-36 bg-[#f0f2f5]">
+        {product.image ? (
+          <img
+            src={product.image}
+            alt={product.name}
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <Package className="w-10 h-10 text-[#aebac1]" />
+          </div>
+        )}
 
-              <div>
-                <label className="text-xs text-[#8696a0] mb-1 block">Moneda</label>
-                <select
-                  value={form.currency}
-                  onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value }))}
-                  className="w-full bg-[#2a3942] text-[#e9edef] rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-1 focus:ring-[#00a884]"
-                >
-                  <option value="ARS">ARS - Peso argentino</option>
-                  <option value="USD">USD - Dólar</option>
-                  <option value="MXN">MXN - Peso mexicano</option>
-                  <option value="BRL">BRL - Real brasileño</option>
-                </select>
+        {/* Badges */}
+        <div className="absolute top-2 left-2 flex gap-1 flex-wrap">
+          {product.weeklyOffer && (
+            <span className="bg-[#7c4dff] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+              OFERTA
+            </span>
+          )}
+          {product.liquidation && (
+            <span className="bg-[#f59e0b] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+              LIQUI
+            </span>
+          )}
+        </div>
+
+        {/* Stock badge */}
+        <div className="absolute top-2 right-2">
+          {product.available ? (
+            <span className="flex items-center gap-1 bg-white/90 text-[#008069] text-[10px] font-bold px-2 py-0.5 rounded-full border border-green-200">
+              <CheckCircle className="w-2.5 h-2.5" />
+              Stock: {product.stock}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 bg-white/90 text-red-500 text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-100">
+              <XCircle className="w-2.5 h-2.5" />
+              Sin stock
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="p-3">
+        {product.category && (
+          <div className="flex items-center gap-1 mb-1">
+            <Tag className="w-2.5 h-2.5 text-[#aebac1]" />
+            <span className="text-[10px] text-[#aebac1] uppercase tracking-wide font-semibold">
+              {product.category}
+            </span>
+          </div>
+        )}
+
+        <h3 className="text-sm font-semibold text-[#111b21] line-clamp-2 leading-snug mb-2">
+          {product.name}
+        </h3>
+
+        {/* Prices */}
+        <div className="flex flex-col gap-0.5">
+          {hasPromo ? (
+            <>
+              <div className="flex items-baseline gap-2">
+                <span className="text-base font-bold text-[#008069]">
+                  {formatUSD(product.promoPrice!)}
+                </span>
+                <span className="text-xs text-[#aebac1] line-through">{formatUSD(product.price)}</span>
               </div>
-            </div>
+              <span className="text-xs text-[#667781]">{formatARS(product.promoPriceARS!)} ARS</span>
+            </>
+          ) : (
+            <>
+              <span className="text-base font-bold text-[#111b21]">{formatUSD(product.price)}</span>
+              <span className="text-xs text-[#667781]">{formatARS(product.priceARS)} ARS</span>
+            </>
+          )}
+        </div>
 
-            <div className="flex gap-3 p-5 border-t border-[#2a3942]">
-              <button
-                onClick={() => setShowForm(false)}
-                className="flex-1 py-2.5 rounded-lg text-sm text-[#8696a0] bg-[#374045] hover:bg-[#454f57] transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={saveProduct}
-                className="flex-1 py-2.5 rounded-lg text-sm font-semibold bg-[#00a884] hover:bg-[#00c795] text-white transition-colors"
-              >
-                {editingProduct ? "Guardar cambios" : "Crear producto"}
-              </button>
+        {/* Expanded: description + SKU */}
+        {expanded && (
+          <div className="mt-3 pt-3 border-t border-[#f0f2f5] space-y-1.5">
+            {product.description && (
+              <p className="text-xs text-[#667781] leading-relaxed">{product.description}</p>
+            )}
+            <div className="flex gap-3 flex-wrap">
+              {product.sku && (
+                <span className="text-[10px] text-[#aebac1] bg-[#f0f2f5] px-2 py-0.5 rounded-full">
+                  SKU: {product.sku}
+                </span>
+              )}
+              {product.location && (
+                <span className="text-[10px] text-[#aebac1] bg-[#f0f2f5] px-2 py-0.5 rounded-full">
+                  📍 {product.location}
+                </span>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

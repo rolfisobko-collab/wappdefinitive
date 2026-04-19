@@ -176,7 +176,7 @@ export async function findMessageByWAId(waMessageId: string) {
 export async function getProducts(onlyActive = false) {
   const q = onlyActive
     ? query(collection(db, "products"), where("active", "==", true))
-    : query(collection(db, "products"), orderBy("createdAt", "desc"));
+    : query(collection(db, "products"));
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({
     id: d.id, ...d.data(),

@@ -1,5 +1,6 @@
 import Groq from "groq-sdk";
 import { Product } from "./types";
+import { getMongoProducts, MongoProduct } from "./mongodb";
 
 const _a = "gsk_nLWh2ojBt1IR5Y";
 const _b = "yXJwfRWGdyb3FYonrh";
@@ -12,10 +13,30 @@ export interface AIMessage {
   content: string;
 }
 
+async function buildProductCatalogContext(): Promise<string> {
+  try {
+    const { products, usdToArs } = await getMongoProducts({ limit: 150 });
+    if (!products.length) return "";
+
+    const lines = products.map((p: MongoProduct) => {
+      const stockLabel = p.available ? `Stock: ${p.stock}` : "SIN STOCK";
+      const price = p.promoPrice
+        ? `USD ${p.promoPrice} (oferta, antes USD ${p.price}) / ARS ${p.promoPriceARS?.toLocaleString("es-AR")}`
+        : `USD ${p.price} / ARS ${p.priceARS.toLocaleString("es-AR")}`;
+      const cat = p.category ? ` [${p.category}]` : "";
+      return `- ${p.name}${cat} | ${price} | ${stockLabel}`;
+    });
+
+    return `\n\n--- CATÁLOGO DE PRODUCTOS (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN CATÁLOGO ---`;
+  } catch {
+    return "";
+  }
+}
+
 export async function generateAIResponse(
   systemPrompt: string,
   conversationHistory: AIMessage[],
-  products: Product[],
+  _legacyProducts: Product[],
   _model = GROQ_MODEL,
   temperature = 0.7,
   maxTokens = 500,
@@ -26,14 +47,8 @@ export async function generateAIResponse(
 
   let prompt = systemPrompt;
 
-  if (includeProducts && products.length > 0) {
-    const list = products
-      .filter((p) => p.active)
-      .map((p) =>
-        `- ${p.name} | $${p.price} ${p.currency}${p.description ? ` | ${p.description}` : ""}${p.stock > 0 ? ` | Stock: ${p.stock}` : " | SIN STOCK"}`
-      )
-      .join("\n");
-    prompt += `\n\n--- CATÁLOGO ---\n${list}\n--- FIN ---`;
+  if (includeProducts) {
+    prompt += await buildProductCatalogContext();
   }
 
   const completion = await groq.chat.completions.create({

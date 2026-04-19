@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useChatStore } from "@/store/chatStore";
 import { ConversationItem } from "./ConversationItem";
 import { ConversationListItem } from "@/lib/types";
-import { Search, Plus, MessageSquare, Settings, Bot, X, Filter } from "lucide-react";
+import { Search, Plus, MessageSquare, Settings, Bot, X, Filter, ShoppingBag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
@@ -85,10 +85,9 @@ export function ConversationSidebar({ onSelectConversation }: ConversationSideba
 
   const totalUnread = conversations.reduce((s, c) => s + c.unreadCount, 0);
 
-  // Tabs — Productos oculto intencionalmente (sin eliminar el código)
   const tabs = [
     { id: "chats",    icon: MessageSquare, label: "Chats",    badge: totalUnread },
-    // { id: "products", icon: Package,       label: "Productos" }, // Deshabilitado temporalmente
+    { id: "products", icon: ShoppingBag,   label: "Catálogo" },
     { id: "settings", icon: Settings,      label: "Config." },
   ];
 
@@ -120,7 +119,7 @@ export function ConversationSidebar({ onSelectConversation }: ConversationSideba
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setSidebarTab(tab.id as "chats" | "settings")}
+            onClick={() => setSidebarTab(tab.id as "chats" | "products" | "settings")}
             className={cn(
               "flex-1 flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-semibold transition-colors relative",
               sidebarTab === tab.id

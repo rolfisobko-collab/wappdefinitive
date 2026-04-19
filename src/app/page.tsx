@@ -5,6 +5,7 @@ import { useChatStore } from "@/store/chatStore";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
 import { ChatWindow } from "@/components/chat/ChatWindow";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
+import { ProductsPanel } from "@/components/products/ProductsPanel";
 import { ToastProvider } from "@/components/ui/Toast";
 import { MessageSquare, Bot, Zap } from "lucide-react";
 
@@ -49,6 +50,8 @@ export default function Home() {
             ) : (
               <EmptyState />
             )
+          ) : sidebarTab === "products" ? (
+            <ProductsPanel />
           ) : (
             <SettingsPanel />
           )}
