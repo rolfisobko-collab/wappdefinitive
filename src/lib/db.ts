@@ -1,6 +1,6 @@
 import {
-  collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc,
-  query, where, orderBy, limit, setDoc, Timestamp, serverTimestamp,
+  collection, doc, getDoc, getDocs, updateDoc, deleteDoc,
+  query, where, limit, setDoc, Timestamp, serverTimestamp,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { v4 as uuid } from "uuid";
@@ -46,8 +46,8 @@ export async function getContact(id: string) {
 // ─── CONVERSATIONS ─────────────────────────────────────────────────────────
 
 export async function getConversations() {
-  const snap = await getDocs(query(collection(db, "conversations"), orderBy("lastMessageAt", "desc")));
-  return Promise.all(snap.docs.map(async (d) => {
+  const snap = await getDocs(query(collection(db, "conversations")));
+  const results = await Promise.all(snap.docs.map(async (d) => {
     const data = d.data();
     const contact = await getContact(data.contactId);
     return {
@@ -59,6 +59,12 @@ export async function getConversations() {
       updatedAt: toDate(data.updatedAt),
     };
   }));
+  // Sort by lastMessageAt desc in JS
+  return results.sort((a, b) => {
+    const ta = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+    const tb = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+    return tb - ta;
+  });
 }
 
 export async function getConversation(id: string) {
@@ -77,18 +83,20 @@ export async function getConversation(id: string) {
 }
 
 export async function findOpenConversation(contactId: string) {
+  // Single where clause to avoid composite index requirement
   const q = query(
     collection(db, "conversations"),
     where("contactId", "==", contactId),
-    where("status", "==", "open"),
-    limit(1)
+    limit(5)
   );
   const snap = await getDocs(q);
   if (snap.empty) return null;
-  const d = snap.docs[0];
-  const data = d.data();
-  const messages = await getMessages(d.id, 20);
-  return { id: d.id, ...data, messages };
+  // Filter open in JS
+  const openDoc = snap.docs.find((d) => d.data().status === "open");
+  if (!openDoc) return null;
+  const data = openDoc.data();
+  const messages = await getMessages(openDoc.id, 20);
+  return { id: openDoc.id, ...data, messages };
 }
 
 export async function createConversation(contactId: string) {
@@ -112,13 +120,14 @@ export async function getMessages(conversationId: string, limitCount = 200) {
   const q = query(
     collection(db, "messages"),
     where("conversationId", "==", conversationId),
-    orderBy("createdAt", "asc"),
     limit(limitCount)
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({
+  const msgs = snap.docs.map((d) => ({
     id: d.id, ...d.data(), createdAt: toDate(d.data().createdAt),
   }));
+  // Sort in JS to avoid needing composite Firestore index
+  return msgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 }
 
 export async function createMessage(data: {
