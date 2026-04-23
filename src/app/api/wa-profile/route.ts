@@ -74,6 +74,9 @@ export async function PUT(req: Request) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[wa-profile PUT]", error);
-    return NextResponse.json({ error: "Error al actualizar perfil" }, { status: 500 });
+    const metaMessage = (error as { response?: { data?: { error?: { message?: string; error_user_msg?: string } } } })
+      ?.response?.data?.error;
+    const userMessage = metaMessage?.error_user_msg ?? metaMessage?.message ?? "Error al actualizar perfil";
+    return NextResponse.json({ error: userMessage }, { status: 500 });
   }
 }

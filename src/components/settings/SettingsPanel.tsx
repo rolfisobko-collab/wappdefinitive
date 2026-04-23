@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AIConfig, WAConfig } from "@/lib/types";
-import { Bot, Webhook, Save, ChevronDown, ChevronUp, Info, Zap, Key, CheckCircle2, Eye, EyeOff, User, Image, ArrowLeft } from "lucide-react";
+import { Bot, Webhook, Save, ChevronDown, ChevronUp, Info, Zap, Key, CheckCircle2, Eye, EyeOff, User, Image, ArrowLeft, Mail, MapPin, Globe } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/store/chatStore";
@@ -18,7 +18,14 @@ export function SettingsPanel() {
   const [savingAI, setSavingAI] = useState(false);
   const [savingWA, setSavingWA] = useState(false);
   const [open, setOpen]         = useState<"ai" | "wa" | "profile" | "info" | null>("ai");
-  const [waProfile, setWaProfile] = useState({ about: "", profilePictureUrl: "" });
+  const [waProfile, setWaProfile] = useState({
+    about: "",
+    description: "",
+    address: "",
+    email: "",
+    websites: [] as string[],
+    profilePictureUrl: "",
+  });
   const [savingProfile, setSavingProfile] = useState(false);
 
   useEffect(() => {
@@ -36,22 +43,46 @@ export function SettingsPanel() {
       const res = await fetch("/api/wa-profile");
       if (!res.ok) return;
       const d = await res.json();
-      setWaProfile({ about: d.data?.[0]?.about ?? "", profilePictureUrl: "" });
+      const p = d.data?.[0] ?? d;
+      setWaProfile({
+        about: p.about ?? "",
+        description: p.description ?? "",
+        address: p.address ?? "",
+        email: p.email ?? "",
+        websites: Array.isArray(p.websites) ? p.websites : (p.websites ? [p.websites] : []),
+        profilePictureUrl: "",
+      });
     } catch { /* silencioso */ }
   }
+
+  useEffect(() => {
+    if (open === "profile") loadWAProfile();
+  }, [open]);
 
   async function saveProfile() {
     setSavingProfile(true);
     try {
+      const payload: Record<string, unknown> = {
+        about: waProfile.about,
+        description: waProfile.description,
+        address: waProfile.address,
+        email: waProfile.email,
+      };
+      if (waProfile.websites.length > 0) payload.websites = waProfile.websites;
+      if (waProfile.profilePictureUrl.trim()) payload.profilePictureUrl = waProfile.profilePictureUrl.trim();
+
       const res = await fetch("/api/wa-profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(waProfile),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Error al actualizar perfil");
+      }
       toast("Perfil de WhatsApp actualizado ✓", "success");
       setWaProfile((p) => ({ ...p, profilePictureUrl: "" }));
-    } catch { toast("Error al actualizar perfil", "error"); }
+    } catch (err) { toast((err as Error).message || "Error al actualizar perfil", "error"); }
     finally { setSavingProfile(false); }
   }
 
@@ -323,39 +354,22 @@ export function SettingsPanel() {
             id="profile"
             icon={User}
             title="Perfil de WhatsApp"
-            subtitle="Foto y descripción del número"
+            subtitle="Foto, nombre y datos del número"
             color="bg-[#f59e0b]"
-            // @ts-ignore
-            onClick={() => { if (open !== "profile") loadWAProfile(); }}
           />
 
           {open === "profile" && (
             <div className="px-5 pb-5 space-y-4 border-t border-[#e9edef] pt-4">
               <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 text-xs text-[#667781] leading-relaxed">
                 <strong className="text-[#111b21] block mb-1">💡 Nombre del número</strong>
-                El nombre que aparece en WhatsApp se cambia desde{" "}
+                El nombre que aparece en WhatsApp solo se puede cambiar desde{" "}
                 <a href="https://business.facebook.com" target="_blank" rel="noopener" className="text-[#008069] hover:underline font-medium">
                   Meta Business Manager
                 </a>{" "}
                 → Configuración de la empresa → Cuentas de WhatsApp → seleccioná el número → Editar nombre.
               </div>
 
-              <div>
-                <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
-                  <User className="w-3 h-3" />
-                  Descripción (About / Acerca de)
-                </label>
-                <textarea
-                  value={waProfile.about}
-                  onChange={(e) => setWaProfile({ ...waProfile, about: e.target.value })}
-                  rows={2}
-                  maxLength={139}
-                  placeholder="Ej: Servicio técnico de celulares · Envíos a todo el país"
-                  className="w-full border border-[#e9edef] bg-[#f0f2f5] text-[#111b21] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#f59e0b] focus:bg-white transition-colors resize-none"
-                />
-                <p className="text-[10px] text-[#aebac1] mt-0.5 text-right">{waProfile.about.length}/139</p>
-              </div>
-
+              {/* Foto de perfil */}
               <div>
                 <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
                   <Image className="w-3 h-3" />
@@ -380,8 +394,87 @@ export function SettingsPanel() {
                   </div>
                 )}
                 <p className="text-[10px] text-[#aebac1] mt-1">
-                  Usá una imagen cuadrada de al menos 192×192px. Se sube automáticamente a Meta al guardar.
+                  Imagen cuadrada de al menos 192×192px. Se sube a Meta al guardar.
                 </p>
+              </div>
+
+              {/* About */}
+              <div>
+                <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
+                  <User className="w-3 h-3" />
+                  Estado (About)
+                </label>
+                <input
+                  type="text"
+                  value={waProfile.about}
+                  onChange={(e) => setWaProfile({ ...waProfile, about: e.target.value })}
+                  maxLength={139}
+                  placeholder="Ej: Atención al cliente · Lunes a Viernes 9–18 hs"
+                  className="w-full border border-[#e9edef] bg-[#f0f2f5] text-[#111b21] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#f59e0b] focus:bg-white transition-colors"
+                />
+                <p className="text-[10px] text-[#aebac1] mt-0.5 text-right">{waProfile.about.length}/139</p>
+              </div>
+
+              {/* Descripción */}
+              <div>
+                <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
+                  <Info className="w-3 h-3" />
+                  Descripción del negocio
+                </label>
+                <textarea
+                  value={waProfile.description}
+                  onChange={(e) => setWaProfile({ ...waProfile, description: e.target.value })}
+                  rows={2}
+                  maxLength={256}
+                  placeholder="Ej: Servicio técnico de celulares. Reparamos cualquier modelo con garantía."
+                  className="w-full border border-[#e9edef] bg-[#f0f2f5] text-[#111b21] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#f59e0b] focus:bg-white transition-colors resize-none"
+                />
+                <p className="text-[10px] text-[#aebac1] mt-0.5 text-right">{waProfile.description.length}/256</p>
+              </div>
+
+              {/* Dirección */}
+              <div>
+                <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
+                  <MapPin className="w-3 h-3" />
+                  Dirección
+                </label>
+                <input
+                  type="text"
+                  value={waProfile.address}
+                  onChange={(e) => setWaProfile({ ...waProfile, address: e.target.value })}
+                  placeholder="Ej: Av. Corrientes 1234, Buenos Aires"
+                  className="w-full border border-[#e9edef] bg-[#f0f2f5] text-[#111b21] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#f59e0b] focus:bg-white transition-colors"
+                />
+              </div>
+
+              {/* Email */}
+              <div>
+                <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
+                  <Mail className="w-3 h-3" />
+                  Email de contacto
+                </label>
+                <input
+                  type="email"
+                  value={waProfile.email}
+                  onChange={(e) => setWaProfile({ ...waProfile, email: e.target.value })}
+                  placeholder="contacto@minegocio.com"
+                  className="w-full border border-[#e9edef] bg-[#f0f2f5] text-[#111b21] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#f59e0b] focus:bg-white transition-colors"
+                />
+              </div>
+
+              {/* Sitio web */}
+              <div>
+                <label className="text-xs text-[#667781] mb-1.5 block font-semibold flex items-center gap-1.5">
+                  <Globe className="w-3 h-3" />
+                  Sitio web
+                </label>
+                <input
+                  type="url"
+                  value={waProfile.websites[0] ?? ""}
+                  onChange={(e) => setWaProfile({ ...waProfile, websites: e.target.value ? [e.target.value] : [] })}
+                  placeholder="https://minegocio.com"
+                  className="w-full border border-[#e9edef] bg-[#f0f2f5] text-[#111b21] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[#f59e0b] focus:bg-white transition-colors"
+                />
               </div>
 
               <button

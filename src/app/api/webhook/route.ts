@@ -18,6 +18,71 @@ type GlobalWithIO = {
   };
 };
 
+// ─── Intent detection ───────────────────────────────────────────────────────
+
+function detectIntent(text: string): "cart_view" | "cart_confirm" | "cart_clear" | null {
+  const t = text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¿¡]/g, "");
+
+  if (
+    /\bmi carrito\b/.test(t) ||
+    /\bver (el |mi )?carrito\b/.test(t) ||
+    /\bmostrar(me)? (el |mi )?carrito\b/.test(t) ||
+    /\bque (tengo|hay) en (el |mi )?carrito\b/.test(t) ||
+    /\bcuanto (tengo|hay) en (el |mi )?carrito\b/.test(t) ||
+    (/\bcarrito\b/.test(t) && /\b(ver|mostrar|dame|manda|quiero|muestra)\b/.test(t))
+  ) return "cart_view";
+
+  if (
+    /\bquiero pagar\b/.test(t) ||
+    /\bvoy a pagar\b/.test(t) ||
+    /\bcomo (se |puedo )?pag[ao]\b/.test(t) ||
+    /\bformas? de pago\b/.test(t) ||
+    /\bmetodos? de pago\b/.test(t) ||
+    /\bopciones? de pago\b/.test(t) ||
+    /\bconfirmar (el |mi )?pedido\b/.test(t) ||
+    /\bfinalizar (la |mi )?compra\b/.test(t) ||
+    /\bproceder al pago\b/.test(t) ||
+    /\bpagar (el |mi )?pedido\b/.test(t) ||
+    /\bquiero comprar\b/.test(t)
+  ) return "cart_confirm";
+
+  if (
+    /\bvaciar (el |mi )?carrito\b/.test(t) ||
+    /\bborrar (el |mi )?carrito\b/.test(t) ||
+    /\blimpiar (el |mi )?carrito\b/.test(t) ||
+    /\beliminar.*(carrito|pedido)\b/.test(t)
+  ) return "cart_clear";
+
+  return null;
+}
+
+// ─── AI history builder (excludes product-search exchanges) ─────────────────
+
+function buildAIHistory(msgs: Array<Record<string, unknown>>): AIMessage[] {
+  const result: AIMessage[] = [];
+  for (const m of msgs) {
+    if (m.direction === "outbound") {
+      try {
+        const meta = m.metadata ? JSON.parse(m.metadata as string) : {};
+        if (meta.isProductSearch) {
+          // Remove the preceding user message that triggered this search
+          if (result.length > 0 && result[result.length - 1].role === "user") result.pop();
+          continue;
+        }
+      } catch { /* keep */ }
+    }
+    result.push({
+      role: m.direction === "inbound" ? "user" : "assistant",
+      content: (m.content as string) ?? "",
+    });
+  }
+  return result;
+}
+
 // ─── Keyword extraction ─────────────────────────────────────────────────────
 
 const STOP_WORDS = new Set([
@@ -331,14 +396,84 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // ── Regular text message: AI response + product search ───────────────
+      // ── Regular text message: intent detection + AI response ────────────
       const freshConv = await findOpenConversation(contact.id) as Record<string, unknown> | null;
       if (!freshConv?.aiEnabled || freshConv?.aiPaused) continue;
 
+      const textForSearch = transcribedText || msg.text;
+
+      // ── Intent detection: handle cart/payment actions from plain text ──
+      if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+        const intent = detectIntent(textForSearch);
+        const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+
+        if (intent === "cart_view") {
+          const cart = await getCart(conversation.id);
+          const items = (cart as Record<string, unknown>)?.items as Array<{ name: string; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+          if (items.length > 0) {
+            const cartText = buildCartText(items);
+            await wa.sendButtons(contact.phone, cartText, [
+              { id: "cart_confirm", title: "✅ Confirmar" },
+              { id: "cart_clear",   title: "🗑️ Vaciar" },
+            ]);
+            const cartMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: cartText, status: "sent" });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cartMsg });
+          } else {
+            const emptyText = "Tu carrito está vacío. ¡Preguntame por cualquier producto y te muestro las opciones! 😊";
+            await wa.sendTextMessage(contact.phone, emptyText);
+            const emptyMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: emptyText, status: "sent" });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: emptyMsg });
+          }
+          continue;
+        }
+
+        if (intent === "cart_confirm") {
+          const cart  = await getCart(conversation.id);
+          const items = (cart as Record<string, unknown>)?.items as Array<{ name: string; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+          if (!items.length) {
+            const emptyText = "Tu carrito está vacío. Agregá productos primero 😊";
+            await wa.sendTextMessage(contact.phone, emptyText);
+            const emptyMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: emptyText, status: "sent" });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: emptyMsg });
+            continue;
+          }
+          const payText = `💳 *¿Cómo querés abonar?*\n\n${buildCartText(items)}`;
+          try {
+            await wa.sendInteractiveList(
+              contact.phone, "Método de pago", payText, "Alta Telefonía", "Ver opciones",
+              [{ title: "Elegí tu método", rows: [
+                { id: "pay_mp",       title: "💳 MercadoPago",      description: "Link de pago instantáneo" },
+                { id: "pay_transfer", title: "🏦 Transferencia",     description: "Banco Santander · Recargo 2.5%" },
+                { id: "pay_usdt",     title: "💵 USDT TRC-20",       description: "Crypto · Red TRON" },
+                { id: "pay_cash",     title: "🏪 Efectivo en local", description: "Retiro y pago en el local" },
+              ]}]
+            );
+          } catch {
+            await wa.sendButtons(contact.phone, payText, [
+              { id: "pay_mp",       title: "💳 MercadoPago" },
+              { id: "pay_transfer", title: "🏦 Transferencia" },
+              { id: "pay_cash",     title: "🏪 Efectivo/USDT" },
+            ]);
+          }
+          const payMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: payText, status: "sent" });
+          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: payMsg });
+          continue;
+        }
+
+        if (intent === "cart_clear") {
+          await removeFromCart(conversation.id);
+          io?.to(`conversation:${conversation.id}`).emit("cart-updated", { conversationId: conversation.id, cart: null });
+          const clearText = "🗑️ Carrito vaciado. ¿En qué más te puedo ayudar?";
+          await wa.sendTextMessage(contact.phone, clearText);
+          const clearMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: clearText, status: "sent" });
+          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: clearMsg });
+          continue;
+        }
+      }
+
       const aiConfig = await getAIConfig() as Record<string, unknown>;
 
-      // Extract keywords and search relevant products (use transcribed text for audio)
-      const textForSearch = transcribedText || msg.text;
+      // Extract keywords and search relevant products
       const keywords = extractKeywords(textForSearch);
       let relevantProducts: MongoProduct[] = [];
       if (keywords.length > 0) {
@@ -349,12 +484,9 @@ export async function POST(req: NextRequest) {
         } catch (e) { console.warn("[mongo search]", e); }
       }
 
-      // Build history — full context, no trimming
-      const msgs = (freshConv.messages as Array<Record<string, unknown>>) ?? [];
-      const history: AIMessage[] = msgs.map((m) => ({
-        role: m.direction === "inbound" ? "user" : "assistant",
-        content: (m.content as string) ?? "",
-      }));
+      // Build history — product-search exchanges are excluded from context
+      const rawMsgs = (freshConv.messages as Array<Record<string, unknown>>) ?? [];
+      const history = buildAIHistory(rawMsgs);
 
       try {
         const aiText = await generateAIResponse(
@@ -369,9 +501,15 @@ export async function POST(req: NextRequest) {
           relevantProducts,
         );
 
+        // Mark product-search responses so they're excluded from future history
+        const msgMetadata = relevantProducts.length > 0
+          ? JSON.stringify({ isProductSearch: true })
+          : null;
+
         const aiMsg = await createMessage({
           conversationId: conversation.id,
           direction: "outbound", sender: "ai", status: "sent", content: aiText,
+          metadata: msgMetadata,
         });
 
         // Emit to UI immediately — before WA send so it always shows even if WA fails
