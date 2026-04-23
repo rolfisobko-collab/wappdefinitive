@@ -60,20 +60,51 @@ function detectIntent(text: string): "cart_view" | "cart_confirm" | "cart_clear"
   return null;
 }
 
+// ─── Product query gate ──────────────────────────────────────────────────────
+// Only search MongoDB when the message is clearly about a product/part/brand.
+// This prevents greetings, location questions, etc. from triggering product injection.
+
+const PRODUCT_INTENT_RE = new RegExp(
+  [
+    // Brands
+    "\\b(iphone|samsung|xiaomi|motorola|oppo|realme|nokia|huawei|lg|sony|apple|poco|redmi|tcl|alcatel)\\b",
+    // Part types (accent-stripped)
+    "\\b(pantalla|modulo|modulos|bateria|baterias|camara|camaras|flex|placa|placas|repuesto|repuestos|cargador|cable|funda|vidrio|tactil|auricular|parlante|bocina|microfono|boton|altavoz|tapa|carcasa|marco|lente|sensor|chip|conector|puerto|lcd|display|touch|cristal)\\b",
+    // Common search phrases
+    "\\b(precio|stock|disponible|cuanto cuesta|cuanto sale|tienen|busco|necesito|quiero|conseguir)\\b.{0,30}\\b(pantalla|modulo|bateria|camara|flex|placa|repuesto|celular|telefono)\\b",
+  ].join("|"),
+  "i"
+);
+
+function isProductQuery(text: string): boolean {
+  const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return PRODUCT_INTENT_RE.test(normalized);
+}
+
 // ─── AI history builder (excludes product-search exchanges) ─────────────────
+// Detects product responses both by metadata flag (new) and by content pattern (old messages).
+
+function looksLikeProductResponse(content: string): boolean {
+  return /USD \$?\d|ARS \$?\d|✅ Disponible|❌ Sin stock|módulo|modulo|pantalla.*USD|USD.*pantalla/i.test(content);
+}
 
 function buildAIHistory(msgs: Array<Record<string, unknown>>): AIMessage[] {
   const result: AIMessage[] = [];
   for (const m of msgs) {
     if (m.direction === "outbound") {
+      // New messages: check metadata flag
       try {
         const meta = m.metadata ? JSON.parse(m.metadata as string) : {};
         if (meta.isProductSearch) {
-          // Remove the preceding user message that triggered this search
           if (result.length > 0 && result[result.length - 1].role === "user") result.pop();
           continue;
         }
       } catch { /* keep */ }
+      // Old messages (pre-fix): detect by content pattern
+      if (looksLikeProductResponse((m.content as string) ?? "")) {
+        if (result.length > 0 && result[result.length - 1].role === "user") result.pop();
+        continue;
+      }
     }
     result.push({
       role: m.direction === "inbound" ? "user" : "assistant",
@@ -473,15 +504,17 @@ export async function POST(req: NextRequest) {
 
       const aiConfig = await getAIConfig() as Record<string, unknown>;
 
-      // Extract keywords and search relevant products
-      const keywords = extractKeywords(textForSearch);
+      // Extract keywords and search relevant products — ONLY for actual product queries
       let relevantProducts: MongoProduct[] = [];
-      if (keywords.length > 0) {
-        try {
-          const expanded = expandKeywords(keywords);
-          const { products } = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false });
-          relevantProducts = products;
-        } catch (e) { console.warn("[mongo search]", e); }
+      if (isProductQuery(textForSearch)) {
+        const keywords = extractKeywords(textForSearch);
+        if (keywords.length > 0) {
+          try {
+            const expanded = expandKeywords(keywords);
+            const { products } = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false });
+            relevantProducts = products;
+          } catch (e) { console.warn("[mongo search]", e); }
+        }
       }
 
       // Build history — product-search exchanges are excluded from context
