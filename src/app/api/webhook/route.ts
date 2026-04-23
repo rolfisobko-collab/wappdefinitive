@@ -82,34 +82,47 @@ function isProductQuery(text: string): boolean {
 }
 
 // ─── AI history builder (excludes product-search exchanges) ─────────────────
-// Detects product responses both by metadata flag (new) and by content pattern (old messages).
-
-function looksLikeProductResponse(content: string): boolean {
-  return /USD \$?\d|ARS \$?\d|✅ Disponible|❌ Sin stock|módulo|modulo|pantalla.*USD|USD.*pantalla/i.test(content);
-}
+// Strategy: look at the USER message to decide if an exchange was about products.
+// This is far more reliable than trying to regex-match the AI's varying responses.
+// Also skips interactive button presses ([🛒 Agregar], etc.) — they're noise.
 
 function buildAIHistory(msgs: Array<Record<string, unknown>>): AIMessage[] {
   const result: AIMessage[] = [];
+  let skipNextBot = false;
+
   for (const m of msgs) {
-    if (m.direction === "outbound") {
-      // New messages: check metadata flag
-      try {
-        const meta = m.metadata ? JSON.parse(m.metadata as string) : {};
-        if (meta.isProductSearch) {
-          if (result.length > 0 && result[result.length - 1].role === "user") result.pop();
-          continue;
-        }
-      } catch { /* keep */ }
-      // Old messages (pre-fix): detect by content pattern
-      if (looksLikeProductResponse((m.content as string) ?? "")) {
-        if (result.length > 0 && result[result.length - 1].role === "user") result.pop();
+    if (m.direction === "inbound") {
+      const text = (m.content as string) ?? "";
+
+      // Skip interactive button presses — they're not conversational context
+      if (text.startsWith("[") && text.endsWith("]")) {
+        skipNextBot = false;
         continue;
       }
+
+      // If the user message is a product query, skip it and the following bot response
+      if (isProductQuery(text)) {
+        skipNextBot = true;
+        continue;
+      }
+
+      skipNextBot = false;
+      result.push({ role: "user", content: text });
+    } else {
+      // Outbound (AI response)
+      if (skipNextBot) {
+        skipNextBot = false;
+        continue; // skip the bot response that followed a product query
+      }
+      // Belt-and-suspenders: also skip via metadata flag (for any edge cases)
+      try {
+        const meta = m.metadata ? JSON.parse(m.metadata as string) : {};
+        if (meta.isProductSearch) continue;
+      } catch { /* keep */ }
+
+      const content = (m.content as string) ?? "";
+      if (content.trim()) result.push({ role: "assistant", content });
     }
-    result.push({
-      role: m.direction === "inbound" ? "user" : "assistant",
-      content: (m.content as string) ?? "",
-    });
   }
   return result;
 }

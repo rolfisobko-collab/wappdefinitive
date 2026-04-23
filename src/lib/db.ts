@@ -95,7 +95,9 @@ export async function findOpenConversation(contactId: string) {
   const openDoc = snap.docs.find((d) => d.data().status === "open");
   if (!openDoc) return null;
   const data = openDoc.data();
-  const messages = await getMessages(openDoc.id, 20);
+  // Fetch up to 200 messages, sort in JS, take the latest 40
+  const allMessages = await getMessages(openDoc.id, 200);
+  const messages = allMessages.slice(-40);
   return { id: openDoc.id, ...data, messages };
 }
 
