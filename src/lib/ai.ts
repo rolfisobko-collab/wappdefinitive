@@ -12,7 +12,7 @@ const GROQ_MODEL    = "llama-3.3-70b-versatile";
 const _o1 = "sk-pro";
 const _o2 = "j-hByrPGrHrNwlw2_iH5mw_hCRa230rqqDtFD3";
 const _o3 = "-tidb5fo0OW1HI1DvLMN6cBWm7k-Ngw3mXMH3AT3BlbkFJRknGQFfpH05BdKMnP1_IXZzS1Bls4Hohd4m2rmGRLpx8QE2iQkRjTZ7qQSKSuSE3muLm7tzrUA";
-const OPENAI_API_KEY = _o1 + _o2 + _o3;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || (_o1 + _o2 + _o3);
 const OPENAI_MODEL   = "gpt-4o-mini";
 
 export interface AIMessage {

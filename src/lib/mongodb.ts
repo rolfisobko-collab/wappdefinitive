@@ -131,6 +131,8 @@ export async function createOrderInMongo(data: {
   items: WAOrder[];
   totalUSD: number;
   notes?: string;
+  paymentMethod?: string;
+  mpPreferenceId?: string;
 }): Promise<string> {
   const db = await getMongoDB();
   const result = await db.collection("orders").insertOne({
@@ -149,8 +151,9 @@ export async function createOrderInMongo(data: {
     subtotal:      data.totalUSD,
     shipping:      0,
     total:         data.totalUSD,
-    paymentMethod: "pending",
+    paymentMethod: data.paymentMethod ?? "pending",
     paymentStatus: "pending",
+    mpPreferenceId: data.mpPreferenceId ?? null,
     shippingAddress: {
       street: "", city: "", state: "", zipCode: "", country: "Argentina",
     },
@@ -161,6 +164,24 @@ export async function createOrderInMongo(data: {
     statusHistory: [],
   });
   return result.insertedId.toString();
+}
+
+/** Actualiza el estado de un pedido WA en MongoDB (usado por el webhook de MP) */
+export async function updateOrderStatus(orderId: string, update: {
+  status?: string;
+  paymentStatus?: string;
+  mpPaymentId?: string | number;
+  stockDeducted?: boolean;
+}): Promise<void> {
+  const { ObjectId } = await import("mongodb");
+  const db = await getMongoDB();
+  const filter = /^[a-f\d]{24}$/i.test(orderId)
+    ? { _id: new ObjectId(orderId) }
+    : { _id: orderId };
+
+  await db.collection("orders").updateOne(filter as never, {
+    $set: { ...update, updatedAt: new Date().toISOString() },
+  });
 }
 
 export interface MongoProduct {

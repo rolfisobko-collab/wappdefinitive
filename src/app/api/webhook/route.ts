@@ -6,10 +6,10 @@ import {
 } from "@/lib/db";
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
 import { generateAIResponse, transcribeAudio, AIMessage } from "@/lib/ai";
-import { getMongoProducts, getMongoProductById, createOrderInMongo, expandKeywords, MongoProduct } from "@/lib/mongodb";
+import { getMongoProducts, getMongoProductById, createOrderInMongo, updateOrderStatus, expandKeywords, MongoProduct } from "@/lib/mongodb";
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
 
-const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "wapp_hub_2026";
+const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
 
 type GlobalWithIO = {
   io?: {
@@ -347,14 +347,31 @@ export async function POST(req: NextRequest) {
           const cart  = await getCart(conversation.id);
           const items = (cart as Record<string, unknown>)?.items as Array<{ mongoProductId: string; name: string; image: string | null; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
           try {
-            const link = await createMPPreference(
-              items.map((i) => ({ name: i.name, quantity: i.quantity, unitPriceARS: i.unitPriceARS * i.quantity })),
-              contact.phone
-            );
-            const mpText = `💳 *Tu link de pago MercadoPago:*\n\n${link}\n\n_Una vez abonado te confirmamos el pedido. ¡Gracias! 😊_`;
-            await wa.sendTextMessage(contact.phone, mpText);
             const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
-            await createOrderInMongo({ contactName: (contact as Record<string,unknown>).name as string || contact.phone, phone: contact.phone, items: items.map(i => ({ mongoProductId: i.mongoProductId, name: i.name, image: i.image, unitPriceUSD: i.unitPriceUSD, quantity: i.quantity })), totalUSD, notes: "Pago via MercadoPago" });
+            const contactName = (contact as Record<string,unknown>).name as string || contact.phone;
+
+            // 1. Crear el pedido primero para obtener el ID (external_reference para MP)
+            const orderId = await createOrderInMongo({
+              contactName,
+              phone: contact.phone,
+              items: items.map(i => ({ mongoProductId: i.mongoProductId, name: i.name, image: i.image, unitPriceUSD: i.unitPriceUSD, quantity: i.quantity })),
+              totalUSD,
+              paymentMethod: "mercadopago",
+              notes: "Pago via MercadoPago",
+            });
+
+            // 2. Crear preferencia de MP con external_reference = orderId (precio unitario correcto)
+            const { initPoint, preferenceId } = await createMPPreference(
+              items.map((i) => ({ name: i.name, quantity: i.quantity, unitPriceARS: i.unitPriceARS })),
+              contact.phone,
+              orderId,
+            );
+
+            // 3. Guardar el preferenceId en el pedido
+            await updateOrderStatus(orderId, { mpPaymentId: preferenceId } as never);
+
+            const mpText = `💳 *Tu link de pago MercadoPago:*\n\n${initPoint}\n\n_Una vez abonado confirmamos el pedido automáticamente. ¡Gracias! 😊_`;
+            await wa.sendTextMessage(contact.phone, mpText);
             const mpMsg = await createMessage({ conversationId: conversation.id, direction: "outbound", sender: "ai", content: mpText, status: "sent" });
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: mpMsg });
           } catch (e) {

@@ -1,4 +1,4 @@
-import { MercadoPagoConfig, Preference } from "mercadopago";
+import { MercadoPagoConfig, Preference, Payment } from "mercadopago";
 
 // ─── Credenciales MercadoPago ────────────────────────────────────────────────
 const _mp1 = "APP_USR-6602267923473389-031617-";
@@ -25,10 +25,21 @@ export const USDT_INFO = {
 export interface MPItem {
   name: string;
   quantity: number;
-  unitPriceARS: number;
+  unitPriceARS: number; // precio UNITARIO en ARS (sin multiplicar por qty)
 }
 
-export async function createMPPreference(items: MPItem[], payerPhone: string): Promise<string> {
+export interface MPPreferenceResult {
+  initPoint: string;
+  preferenceId: string;
+}
+
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://altatelefonia.com.ar";
+
+export async function createMPPreference(
+  items: MPItem[],
+  payerPhone: string,
+  externalReference?: string,  // ID del pedido en MongoDB
+): Promise<MPPreferenceResult> {
   const client = new MercadoPagoConfig({ accessToken: MP_ACCESS_TOKEN });
   const preference = new Preference(client);
 
@@ -38,7 +49,7 @@ export async function createMPPreference(items: MPItem[], payerPhone: string): P
         id:          i.name.slice(0, 50),
         title:       i.name.slice(0, 256),
         quantity:    i.quantity,
-        unit_price:  Math.round(i.unitPriceARS),
+        unit_price:  Math.round(i.unitPriceARS), // precio unitario, MP multiplica por quantity
         currency_id: "ARS",
       })),
       payer: {
@@ -50,6 +61,8 @@ export async function createMPPreference(items: MPItem[], payerPhone: string): P
       },
       statement_descriptor: "Alta Telefonia",
       auto_return: "approved",
+      external_reference: externalReference ?? "",
+      notification_url: `${APP_URL}/api/mercadopago/webhook`,
       back_urls: {
         success: "https://altatelefonia.com.ar",
         failure: "https://altatelefonia.com.ar",
@@ -58,7 +71,17 @@ export async function createMPPreference(items: MPItem[], payerPhone: string): P
     },
   });
 
-  return response.init_point ?? "";
+  return {
+    initPoint: response.init_point ?? "",
+    preferenceId: response.id ?? "",
+  };
+}
+
+/** Obtiene los datos de un pago de MP por ID */
+export async function getMPPayment(paymentId: string | number) {
+  const client = new MercadoPagoConfig({ accessToken: MP_ACCESS_TOKEN });
+  const payment = new Payment(client);
+  return payment.get({ id: Number(paymentId) });
 }
 
 // ─── Calcular total con recargo de transferencia ─────────────────────────────
