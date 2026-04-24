@@ -275,36 +275,65 @@ export async function getMongoProducts(opts: {
   if (opts.keywords?.length || opts.search) {
     const rawKeywords = opts.keywords ?? (opts.search ? [opts.search] : []);
 
-    if (opts.exact) {
-      // EXACT mode: AND regex on raw keywords only — no expansion, no text index
+    const searchQuery = rawKeywords.join(" ");
+    const lim = opts.limit ?? 10;
+
+    // 1. Atlas Search — fuzzy, analyzer español, ordenado por relevancia
+    try {
+      const atlasResults = await db.collection("stock").aggregate([
+        {
+          $search: {
+            index: "product_search",
+            compound: {
+              must: [
+                {
+                  text: {
+                    query: searchQuery,
+                    path: "name",
+                    fuzzy: { maxEdits: 1, prefixLength: 2 },
+                    score: { boost: { value: 3 } },
+                  },
+                },
+              ],
+              should: [
+                {
+                  text: {
+                    query: searchQuery,
+                    path: "description",
+                    fuzzy: { maxEdits: 1 },
+                  },
+                },
+              ],
+            },
+          },
+        },
+        { $addFields: { score: { $meta: "searchScore" } } },
+        { $match: { isActive: { $ne: false }, price: { $gt: 0 }, ...(opts.onlyAvailable ? { quantity: { $gt: 0 } } : {}), ...(opts.categoryId ? { category: opts.categoryId } : {}) } },
+        { $sort: { score: -1 } },
+        { $limit: lim },
+      ]).toArray();
+
+      if (atlasResults.length > 0) {
+        raw = atlasResults;
+      } else {
+        throw new Error("atlas empty");
+      }
+    } catch {
+      // 2. Fallback: exact AND regex on raw keywords
       const andFilter = { ...baseFilter, ...buildSearchFilter(rawKeywords) };
-      raw = await db.collection("stock").find(andFilter).limit(opts.limit ?? 10).toArray();
-    } else {
-      const expanded = expandKeywords(rawKeywords);
+      raw = await db.collection("stock").find(andFilter).limit(lim).toArray();
 
-      // 1. Text index with forced AND ("+" prefix on each term)
-      try {
-        const textSearch = expanded.map((k) => `+${k}`).join(" ");
-        const textFilter = { ...baseFilter, $text: { $search: textSearch } };
-        raw = await db.collection("stock")
-          .find(textFilter, { projection: { score: { $meta: "textScore" } } })
-          .sort({ score: { $meta: "textScore" } })
-          .limit(opts.limit ?? 10)
-          .toArray();
-      } catch {
-        raw = [];
-      }
-
-      // 2. AND regex fallback (all keywords must appear in the name)
-      if (raw.length < 2) {
-        const andFilter = { ...baseFilter, ...buildSearchFilter(expanded) };
-        raw = await db.collection("stock").find(andFilter).limit(opts.limit ?? 10).toArray();
-      }
-
-      // 3. OR regex fallback (at least one keyword matches) — last resort
+      // 3. Expand synonyms if still nothing
       if (raw.length === 0) {
-        const orFilter = { ...baseFilter, ...buildSearchFilterOr(expanded) };
-        raw = await db.collection("stock").find(orFilter).limit(opts.limit ?? 10).toArray();
+        const expanded = expandKeywords(rawKeywords);
+        const r2 = await db.collection("stock").find({ ...baseFilter, ...buildSearchFilter(expanded) }).limit(lim).toArray();
+        raw = r2;
+      }
+
+      // 4. OR fallback — last resort
+      if (raw.length === 0) {
+        const orFilter = { ...baseFilter, ...buildSearchFilterOr(rawKeywords) };
+        raw = await db.collection("stock").find(orFilter).limit(lim).toArray();
       }
     }
   } else {

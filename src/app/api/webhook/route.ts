@@ -5,7 +5,7 @@ import {
   addToCart, getCart, removeFromCart,
 } from "@/lib/db";
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
-import { generateAIResponse, transcribeAudio, AIMessage } from "@/lib/ai";
+import { generateAIResponse, transcribeAudio, filterProductsByRelevance, AIMessage } from "@/lib/ai";
 import { getMongoProducts, getMongoProductById, createOrderInMongo, updateOrderStatus, expandKeywords, MongoProduct } from "@/lib/mongodb";
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
 
@@ -596,8 +596,10 @@ export async function POST(req: NextRequest) {
                 products = r3.products;
               }
             }
+            // Validación IA: filtra productos que no coinciden con lo pedido
+            const filtered = await filterProductsByRelevance(q, products, aiConfig?.groqApiKey as string | null);
             // Deduplicate by product id across queries
-            const newProds = products.filter(p => !relevantProducts.find(r => r.id === p.id));
+            const newProds = filtered.filter(p => !relevantProducts.find(r => r.id === p.id));
             searchQueries.push({ label: keywords.join(" "), products: newProds });
             relevantProducts.push(...newProds);
           } catch (e) { console.warn("[mongo search]", e); }

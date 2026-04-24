@@ -20,6 +20,45 @@ export interface AIMessage {
   content: string;
 }
 
+// ─── Validación IA: filtra productos irrelevantes antes de mostrarlos ─────────
+export async function filterProductsByRelevance(
+  userQuery: string,
+  products: MongoProduct[],
+  groqApiKey?: string | null,
+): Promise<MongoProduct[]> {
+  if (products.length === 0) return [];
+
+  const groq = new Groq({ apiKey: groqApiKey || GROQ_API_KEY });
+
+  const list = products
+    .map((p, i) => `${i + 1}. [${p.sku ?? "s/n"}] ${p.name} — USD ${p.price}`)
+    .join("\n");
+
+  const prompt = `El cliente busca: "${userQuery}"
+
+Estos son los productos encontrados:
+${list}
+
+Respondé SOLO con los números de los productos que realmente coinciden con lo que pidió el cliente (ej: "1,3"). Si ninguno coincide, respondé "ninguno". Sin explicación, solo los números o "ninguno".`;
+
+  try {
+    const res = await groq.chat.completions.create({
+      model: GROQ_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 30,
+      temperature: 0,
+    });
+    const answer = (res.choices[0]?.message?.content ?? "").trim().toLowerCase();
+    if (answer === "ninguno" || answer === "") return [];
+
+    const nums = answer.split(/[\s,]+/).map(n => parseInt(n)).filter(n => !isNaN(n) && n >= 1 && n <= products.length);
+    return nums.map(n => products[n - 1]);
+  } catch {
+    // Si falla la validación, devolver todos (no bloquear)
+    return products;
+  }
+}
+
 async function buildProductCatalogContext(): Promise<string> {
   try {
     const { categories, usdToArs } = await getMongoProducts({ limit: 1 });
