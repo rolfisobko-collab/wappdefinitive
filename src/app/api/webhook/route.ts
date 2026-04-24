@@ -151,10 +151,38 @@ function extractKeywords(text: string): string[] {
   // Keep numeric tokens (model numbers like 13, 15, s8, a54) even if short
   // Keep alpha tokens only if length > 2
   const filtered = normalized.filter((w) => /^\d+$/.test(w) ? w.length >= 1 : w.length > 2);
-
-  // Detect phone model phrases like "13 pro max", "s23 ultra", "a54" and keep them together
-  // as individual tokens — just return filtered tokens, MongoDB AND search handles precision
   return filtered.slice(0, 8);
+}
+
+// ─── Multi-product query splitter ────────────────────────────────────────────
+// Splits "modulo iphone 13 y 13 pro max" into two searches:
+// ["modulo iphone 13", "modulo iphone 13 pro max"]
+function splitProductQueries(text: string): string[] {
+  const norm = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  // Detect "y" or "," or "también" as separators between model mentions
+  // Pattern: <part> <brand> <model1> y <model2>  OR  <part> <model1> y <part> <model2>
+  // Strategy: split on " y ", ",", " también ", " ademas "
+  const parts = norm.split(/\s+[y,]\s+|\s+tambien\s+|\s+ademas\s+/).map(s => s.trim()).filter(Boolean);
+  if (parts.length <= 1) return [norm];
+
+  // Detect the "part" keyword (modulo, bateria, etc.) from the first segment
+  // and prepend it to subsequent segments if they don't already have a part keyword
+  const PART_RE = /\b(modulo|pantalla|bateria|camara|flex|placa|repuesto|cargador|vidrio|tactil|lcd|display|touch|tapa|carcasa)\b/;
+  const BRAND_RE = /\b(iphone|samsung|xiaomi|motorola|oppo|realme|nokia|huawei|lg|sony|apple|poco|redmi)\b/;
+
+  const firstPartMatch = parts[0].match(PART_RE)?.[0];
+  const firstBrandMatch = parts[0].match(BRAND_RE)?.[0];
+
+  return parts.map((p, i) => {
+    if (i === 0) return p;
+    let q = p;
+    // If subsequent segment has no part keyword, prepend from first
+    if (firstPartMatch && !PART_RE.test(q)) q = `${firstPartMatch} ${q}`;
+    // If subsequent segment has no brand, prepend from first
+    if (firstBrandMatch && !BRAND_RE.test(q)) q = `${firstBrandMatch} ${q}`;
+    return q;
+  });
 }
 
 // ─── Cart message builder ────────────────────────────────────────────────────
@@ -543,20 +571,26 @@ export async function POST(req: NextRequest) {
 
       // Extract keywords and search relevant products — ONLY for actual product queries
       let relevantProducts: MongoProduct[] = [];
+      // Map each query string to its found products (for searching labels)
+      const searchQueries: Array<{ label: string; products: MongoProduct[] }> = [];
+
       if (isProductQuery(textForSearch)) {
-        const keywords = extractKeywords(textForSearch);
-        if (keywords.length > 0) {
+        const queries = splitProductQueries(textForSearch);
+        for (const q of queries) {
+          const keywords = extractKeywords(q);
+          if (keywords.length === 0) continue;
           try {
             const expanded = expandKeywords(keywords);
-            // Try with all keywords first (precise), fallback to fewer if no results
-            let { products } = await getMongoProducts({ keywords: expanded, limit: 6, onlyAvailable: false });
+            let { products } = await getMongoProducts({ keywords: expanded, limit: 3, onlyAvailable: false });
             if (products.length === 0 && expanded.length > 2) {
-              // Fallback: drop stop-like words, keep brand + model + part
               const coreKw = expanded.filter((k) => !/^(de|del|la|el|y|e|con|para|un|una)$/.test(k));
-              const r2 = await getMongoProducts({ keywords: coreKw, limit: 6, onlyAvailable: false });
+              const r2 = await getMongoProducts({ keywords: coreKw, limit: 3, onlyAvailable: false });
               products = r2.products;
             }
-            relevantProducts = products;
+            // Deduplicate by product id across queries
+            const newProds = products.filter(p => !relevantProducts.find(r => r.id === p.id));
+            searchQueries.push({ label: keywords.join(" "), products: newProds });
+            relevantProducts.push(...newProds);
           } catch (e) { console.warn("[mongo search]", e); }
         }
       }
@@ -609,9 +643,24 @@ export async function POST(req: NextRequest) {
             try { await wa.sendTextMessage(contact.phone, aiText); } catch { /* ignore */ }
           }
 
-          // Product cards (max 3)
+          // Product cards — grouped by search query with "Buscando..." label
           if (relevantProducts.length > 0) {
-            for (const product of relevantProducts.slice(0, 3)) {
+            // Send a "searching" indicator per query group
+            for (const sq of searchQueries) {
+              if (sq.products.length === 0) continue;
+              const searchLabel = `🔍 *Buscando:* ${sq.label}`;
+              // Save search label message in Firestore + emit to UI
+              const searchLabelMsg = await createMessage({
+                conversationId: conversation.id,
+                direction: "outbound", sender: "ai", status: "sent",
+                content: searchLabel,
+                metadata: JSON.stringify({ isProductSearch: true }),
+              });
+              io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: searchLabelMsg });
+              try { await wa.sendTextMessage(contact.phone, searchLabel); } catch { /* ignore */ }
+            }
+
+            for (const product of relevantProducts.slice(0, 6)) {
               const caption =
                 `📦 *${product.name}*\n` +
                 (product.category ? `🏷️ ${product.category}\n` : "") +
