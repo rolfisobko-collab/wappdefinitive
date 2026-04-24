@@ -580,12 +580,19 @@ export async function POST(req: NextRequest) {
           const keywords = extractKeywords(q);
           if (keywords.length === 0) continue;
           try {
-            const expanded = expandKeywords(keywords);
-            let { products } = await getMongoProducts({ keywords: expanded, limit: 3, onlyAvailable: false });
-            if (products.length === 0 && expanded.length > 2) {
-              const coreKw = expanded.filter((k) => !/^(de|del|la|el|y|e|con|para|un|una)$/.test(k));
-              const r2 = await getMongoProducts({ keywords: coreKw, limit: 3, onlyAvailable: false });
+            // Search with raw keywords first (most precise — no synonym noise)
+            let { products } = await getMongoProducts({ keywords, limit: 3, onlyAvailable: false });
+            // Fallback 1: expand synonyms only if raw search returns nothing
+            if (products.length === 0) {
+              const expanded = expandKeywords(keywords);
+              const r2 = await getMongoProducts({ keywords: expanded, limit: 3, onlyAvailable: false });
               products = r2.products;
+            }
+            // Fallback 2: drop numeric model if still nothing (e.g. "modulo iphone" alone)
+            if (products.length === 0 && keywords.length > 2) {
+              const noNum = keywords.filter(k => !/^\d+$/.test(k));
+              const r3 = await getMongoProducts({ keywords: noNum, limit: 3, onlyAvailable: false });
+              products = r3.products;
             }
             // Deduplicate by product id across queries
             const newProds = products.filter(p => !relevantProducts.find(r => r.id === p.id));
@@ -600,67 +607,66 @@ export async function POST(req: NextRequest) {
       const history = buildAIHistory(rawMsgs);
 
       try {
-        const aiText = await generateAIResponse(
-          aiConfig.systemPrompt as string,
-          history,
-          [],
-          undefined,
-          aiConfig.temperature as number,
-          aiConfig.maxTokens as number,
-          aiConfig.includeProducts as boolean,
-          aiConfig.groqApiKey as string | null,
-          relevantProducts,
-        );
+        // ── If product search found results → skip AI text, only send cards ──
+        const hasProductResults = relevantProducts.length > 0;
 
-        // Mark product-search responses so they're excluded from future history
-        const msgMetadata = relevantProducts.length > 0
-          ? JSON.stringify({ isProductSearch: true })
-          : null;
+        if (!hasProductResults) {
+          // Pure conversational response
+          const aiText = await generateAIResponse(
+            aiConfig.systemPrompt as string,
+            history,
+            [],
+            undefined,
+            aiConfig.temperature as number,
+            aiConfig.maxTokens as number,
+            aiConfig.includeProducts as boolean,
+            aiConfig.groqApiKey as string | null,
+            [],
+          );
 
-        const aiMsg = await createMessage({
-          conversationId: conversation.id,
-          direction: "outbound", sender: "ai", status: "sent", content: aiText,
-          metadata: msgMetadata,
-        });
+          const aiMsg = await createMessage({
+            conversationId: conversation.id,
+            direction: "outbound", sender: "ai", status: "sent", content: aiText,
+            metadata: null,
+          });
+          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: aiMsg });
 
-        // Emit to UI immediately — before WA send so it always shows even if WA fails
-        io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: aiMsg });
-
-        // Send via WhatsApp (fire and forget — errors don't block UI update)
-        if (waConfig?.phoneNumberId && waConfig?.accessToken) {
-          const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
-          // Add "Ver carrito" button if cart has items
-          try {
-            const cartCheck = await getCart(conversation.id);
-            const cartHasItems = ((cartCheck as Record<string,unknown>)?.items as unknown[] | undefined)?.length ?? 0;
-            if (cartHasItems > 0) {
-              await wa.sendButtons(contact.phone, aiText, [{ id: "cart_view", title: "🛒 Ver carrito" }]);
-            } else {
-              await wa.sendTextMessage(contact.phone, aiText);
+          if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+            const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+            try {
+              const cartCheck = await getCart(conversation.id);
+              const cartHasItems = ((cartCheck as Record<string,unknown>)?.items as unknown[] | undefined)?.length ?? 0;
+              if (cartHasItems > 0) {
+                await wa.sendButtons(contact.phone, aiText, [{ id: "cart_view", title: "🛒 Ver carrito" }]);
+              } else {
+                await wa.sendTextMessage(contact.phone, aiText);
+              }
+            } catch (e) {
+              console.error("[WA sendText]", e);
+              try { await wa.sendTextMessage(contact.phone, aiText); } catch { /* ignore */ }
             }
-          } catch (e) {
-            console.error("[WA sendText]", e);
-            try { await wa.sendTextMessage(contact.phone, aiText); } catch { /* ignore */ }
+          }
+        }
+
+        // Send via WhatsApp product cards
+        if (hasProductResults && waConfig?.phoneNumberId && waConfig?.accessToken) {
+          const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+
+          // "Buscando..." label per query group — only if products found
+          for (const sq of searchQueries) {
+            if (sq.products.length === 0) continue;
+            const searchLabel = `🔍 *Buscando:* ${sq.label}`;
+            const searchLabelMsg = await createMessage({
+              conversationId: conversation.id,
+              direction: "outbound", sender: "ai", status: "sent",
+              content: searchLabel,
+              metadata: JSON.stringify({ isProductSearch: true }),
+            });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: searchLabelMsg });
+            try { await wa.sendTextMessage(contact.phone, searchLabel); } catch { /* ignore */ }
           }
 
-          // Product cards — grouped by search query with "Buscando..." label
-          if (relevantProducts.length > 0) {
-            // Send a "searching" indicator per query group
-            for (const sq of searchQueries) {
-              if (sq.products.length === 0) continue;
-              const searchLabel = `🔍 *Buscando:* ${sq.label}`;
-              // Save search label message in Firestore + emit to UI
-              const searchLabelMsg = await createMessage({
-                conversationId: conversation.id,
-                direction: "outbound", sender: "ai", status: "sent",
-                content: searchLabel,
-                metadata: JSON.stringify({ isProductSearch: true }),
-              });
-              io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: searchLabelMsg });
-              try { await wa.sendTextMessage(contact.phone, searchLabel); } catch { /* ignore */ }
-            }
-
-            for (const product of relevantProducts.slice(0, 6)) {
+          for (const product of relevantProducts.slice(0, 6)) {
               const caption =
                 `📦 *${product.name}*\n` +
                 (product.category ? `🏷️ ${product.category}\n` : "") +
@@ -674,7 +680,6 @@ export async function POST(req: NextRequest) {
               try { await wa.sendProductCard(contact.phone, product.image, caption, cardButtons); }
               catch (e) { console.warn("[sendProductCard]", e); }
 
-              // Save card in Firestore with image + buttons metadata so the panel can render it
               const cardMeta = JSON.stringify({
                 headerImage: product.image ?? null,
                 buttons: cardButtons,
@@ -688,7 +693,6 @@ export async function POST(req: NextRequest) {
               });
               io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
             }
-          }
         }
       } catch (e) { console.error("[AI Error]", e); }
     }
