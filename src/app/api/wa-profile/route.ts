@@ -67,7 +67,7 @@ export async function PUT(req: Request) {
 
     await axios.post(
       `${WA_API}/${phoneNumberId}/whatsapp_business_profile`,
-      payload,
+      { messaging_product: "whatsapp", ...payload },
       { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }
     );
 
