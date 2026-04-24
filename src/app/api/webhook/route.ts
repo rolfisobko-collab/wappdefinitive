@@ -580,19 +580,19 @@ export async function POST(req: NextRequest) {
           const keywords = extractKeywords(q);
           if (keywords.length === 0) continue;
           try {
-            // 1. Exact AND regex — raw keywords, sin expansión
-            let { products } = await getMongoProducts({ keywords, limit: 3, onlyAvailable: false, exact: true });
-            // 2. Expand synonyms si no encontró nada
+            // 1. Atlas Search con keywords crudas (fuzzy, ordenado por relevancia)
+            let { products } = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false });
+            // 2. Fallback AND regex con expansión de sinónimos si Atlas no encontró nada
             if (products.length === 0) {
               const expanded = expandKeywords(keywords);
-              const r2 = await getMongoProducts({ keywords: expanded, limit: 3, onlyAvailable: false, exact: true });
+              const r2 = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false, exact: true });
               products = r2.products;
             }
-            // 3. Sin número de modelo (ej: solo "modulo iphone") si sigue sin resultados
+            // 3. Sin número de modelo si sigue sin resultados
             if (products.length === 0 && keywords.some(k => /^\d+$/.test(k))) {
               const noNum = keywords.filter(k => !/^\d+$/.test(k));
               if (noNum.length > 0) {
-                const r3 = await getMongoProducts({ keywords: noNum, limit: 3, onlyAvailable: false, exact: true });
+                const r3 = await getMongoProducts({ keywords: noNum, limit: 5, onlyAvailable: false });
                 products = r3.products;
               }
             }
@@ -682,8 +682,18 @@ export async function POST(req: NextRequest) {
                 ? [{ id: `cart_add_${product.id}`, title: "🛒 Agregar" }, { id: "cart_view", title: "Ver carrito" }]
                 : [{ id: "catalog_more", title: "🔍 Ver más" }];
 
-              try { await wa.sendProductCard(contact.phone, product.image, caption, cardButtons); }
-              catch (e) { console.warn("[sendProductCard]", e); }
+              try {
+                await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
+              } catch (cardErr: unknown) {
+                const errMsg = cardErr instanceof Error ? cardErr.message : String(cardErr);
+                console.error("[sendProductCard failed]", errMsg);
+                // Fallback: send as plain text so the user always gets something
+                try {
+                  await wa.sendTextMessage(contact.phone, caption);
+                } catch (textErr) {
+                  console.error("[sendProductCard fallback text failed]", textErr);
+                }
+              }
 
               const cardMeta = JSON.stringify({
                 headerImage: product.image ?? null,

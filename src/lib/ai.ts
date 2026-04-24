@@ -36,25 +36,28 @@ export async function filterProductsByRelevance(
 
   const prompt = `El cliente busca: "${userQuery}"
 
-Estos son los productos encontrados:
+Productos encontrados:
 ${list}
 
-Respondé SOLO con los números de los productos que realmente coinciden con lo que pidió el cliente (ej: "1,3"). Si ninguno coincide, respondé "ninguno". Sin explicación, solo los números o "ninguno".`;
+Respondé SOLO con los números de los que SÍ coinciden exactamente con lo pedido (ej: "1,3"). Solo respondé "ninguno" si estás 100% seguro de que ninguno coincide. En caso de duda, incluí el número. Sin explicación.`;
 
   try {
     const res = await groq.chat.completions.create({
       model: GROQ_MODEL,
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 30,
+      max_tokens: 40,
       temperature: 0,
     });
     const answer = (res.choices[0]?.message?.content ?? "").trim().toLowerCase();
-    if (answer === "ninguno" || answer === "") return [];
 
-    const nums = answer.split(/[\s,]+/).map(n => parseInt(n)).filter(n => !isNaN(n) && n >= 1 && n <= products.length);
+    // Solo descartar todo si explícitamente dice "ninguno"
+    if (answer === "ninguno") return [];
+
+    // Si la respuesta no tiene números válidos, conservar todos (no bloquear)
+    const nums = answer.split(/[\s,;]+/).map(n => parseInt(n)).filter(n => !isNaN(n) && n >= 1 && n <= products.length);
+    if (nums.length === 0) return products;
     return nums.map(n => products[n - 1]);
   } catch {
-    // Si falla la validación, devolver todos (no bloquear)
     return products;
   }
 }
