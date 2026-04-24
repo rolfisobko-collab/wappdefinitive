@@ -140,14 +140,21 @@ const STOP_WORDS = new Set([
 ]);
 
 function extractKeywords(text: string): string[] {
-  return text
+  const normalized = text
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 2 && !STOP_WORDS.has(w))
-    .slice(0, 6);
+    .filter((w) => w.length > 0 && !STOP_WORDS.has(w));
+
+  // Keep numeric tokens (model numbers like 13, 15, s8, a54) even if short
+  // Keep alpha tokens only if length > 2
+  const filtered = normalized.filter((w) => /^\d+$/.test(w) ? w.length >= 1 : w.length > 2);
+
+  // Detect phone model phrases like "13 pro max", "s23 ultra", "a54" and keep them together
+  // as individual tokens — just return filtered tokens, MongoDB AND search handles precision
+  return filtered.slice(0, 8);
 }
 
 // ─── Cart message builder ────────────────────────────────────────────────────
@@ -541,7 +548,14 @@ export async function POST(req: NextRequest) {
         if (keywords.length > 0) {
           try {
             const expanded = expandKeywords(keywords);
-            const { products } = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false });
+            // Try with all keywords first (precise), fallback to fewer if no results
+            let { products } = await getMongoProducts({ keywords: expanded, limit: 6, onlyAvailable: false });
+            if (products.length === 0 && expanded.length > 2) {
+              // Fallback: drop stop-like words, keep brand + model + part
+              const coreKw = expanded.filter((k) => !/^(de|del|la|el|y|e|con|para|un|una)$/.test(k));
+              const r2 = await getMongoProducts({ keywords: coreKw, limit: 6, onlyAvailable: false });
+              products = r2.products;
+            }
             relevantProducts = products;
           } catch (e) { console.warn("[mongo search]", e); }
         }

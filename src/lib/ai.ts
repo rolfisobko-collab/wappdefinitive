@@ -89,7 +89,7 @@ export async function generateAIResponse(
         const cat = p.category ? ` [${p.category}]` : "";
         return `- ${p.name}${cat} | ${price} | ${stockLabel}`;
       });
-      prompt += `\n\n--- PRODUCTOS ENCONTRADOS PARA LA CONSULTA ACTUAL (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN ---\n\n⚠️ INSTRUCCIÓN CRÍTICA PARA ESTE MENSAJE:\nEl cliente acaba de preguntar por ESTOS productos específicos. Ignorá COMPLETAMENTE cualquier tema o producto anterior de la conversación — eso ya pasó. Tu único trabajo ahora es presentar ESTOS productos de forma corta (máx. 2-3 líneas), entusiasta y marketinera. No menciones, no hagas referencia, no "cerrés" el tema anterior. Actuá como si fuese la primera vez que te preguntan algo hoy. Invitá a agregar al carrito. Solo emojis moderados.`;
+      prompt += `\n\n--- PRODUCTOS ENCONTRADOS (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN ---\n\n⚠️ REGLAS ESTRICTAS PARA ESTE MENSAJE:\n1. Presentá SOLO los productos de la lista de arriba — no inventes ni agregues otros.\n2. Si hay productos disponibles: mostrá nombre, precio USD y ARS, y estado de stock.\n3. Si hay productos sin stock: avisalo claramente igual.\n4. Sé breve: máx 3-4 líneas por producto.\n5. No menciones temas anteriores de la conversación.\n6. Si el cliente escribió mal el modelo (ej: "13 pro maxx") igual mostrá lo que encontraste más cercano.\n7. Invitá a agregar al carrito con el botón que aparece debajo.`;
     } else {
       // No specific products found — use general catalog
       prompt += await buildProductCatalogContext();
