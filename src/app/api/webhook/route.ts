@@ -160,10 +160,8 @@ function extractKeywords(text: string): string[] {
 function splitProductQueries(text: string): string[] {
   const norm = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-  // Detect "y" or "," or "también" as separators between model mentions
-  // Pattern: <part> <brand> <model1> y <model2>  OR  <part> <model1> y <part> <model2>
-  // Strategy: split on " y ", ",", " también ", " ademas "
-  const parts = norm.split(/\s+[y,]\s+|\s+tambien\s+|\s+ademas\s+/).map(s => s.trim()).filter(Boolean);
+  // Split on connectors — soporta N productos, sin límite
+  const parts = norm.split(/\s+[y,]\s+|\s+tambien\s+|\s+ademas\s+|\s+mas\s+|\s+\+\s+/).map(s => s.trim()).filter(Boolean);
   if (parts.length <= 1) return [norm];
 
   // Detect the "part" keyword (modulo, bateria, etc.) from the first segment
@@ -687,11 +685,13 @@ export async function POST(req: NextRequest) {
               } catch (cardErr: unknown) {
                 const errMsg = cardErr instanceof Error ? cardErr.message : String(cardErr);
                 console.error("[sendProductCard failed]", errMsg);
-                // Fallback: send as plain text so the user always gets something
-                try {
-                  await wa.sendTextMessage(contact.phone, caption);
-                } catch (textErr) {
-                  console.error("[sendProductCard fallback text failed]", textErr);
+                // Si falla con imagen, intentar sin imagen
+                if (product.image) {
+                  try {
+                    await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+                  } catch (noImgErr) {
+                    console.error("[sendProductCard no-image also failed]", noImgErr);
+                  }
                 }
               }
 
