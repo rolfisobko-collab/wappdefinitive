@@ -183,6 +183,37 @@ function splitProductQueries(text: string): string[] {
   });
 }
 
+// ─── Keyword → category hint ──────────────────────────────────────────────────
+// Maps part-type keywords to MongoDB stockCategories names (partial match)
+const CATEGORY_HINTS: Record<string, string> = {
+  bateria: "bater",
+  battery: "bater",
+  modulo: "modulo",
+  pantalla: "modulo",
+  display: "modulo",
+  lcd: "modulo",
+  camara: "camara",
+  camera: "camara",
+  lente: "camara",
+  flex: "flex",
+  placa: "placa",
+  board: "placa",
+  tapa: "tapa",
+  carcasa: "tapa",
+  cargador: "cargador",
+  charger: "cargador",
+  auricular: "auricular",
+  parlante: "auricular",
+};
+
+function detectCategoryHint(keywords: string[]): string | null {
+  for (const kw of keywords) {
+    const norm = kw.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (CATEGORY_HINTS[norm]) return CATEGORY_HINTS[norm];
+  }
+  return null;
+}
+
 // ─── Cart message builder ────────────────────────────────────────────────────
 
 function buildCartText(items: Array<{ name: string; quantity: number; unitPriceUSD: number; unitPriceARS: number }>) {
@@ -578,19 +609,32 @@ export async function POST(req: NextRequest) {
           const keywords = extractKeywords(q);
           if (keywords.length === 0) continue;
           try {
-            // 1. Atlas Search con keywords crudas (fuzzy, ordenado por relevancia)
-            let { products } = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false });
-            // 2. Fallback AND regex con expansión de sinónimos si Atlas no encontró nada
+            // Detectar categoría hint para filtrar más preciso
+            const catHint = detectCategoryHint(keywords);
+            const { categories } = await getMongoProducts({ limit: 1 });
+            const matchedCat = catHint
+              ? categories.find(c => c.name.toLowerCase().includes(catHint))
+              : null;
+            const categoryId = matchedCat?.id ?? undefined;
+
+            // 1. Atlas Search con keywords + categoría si se detectó
+            let { products } = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false, categoryId });
+            // 2. Sin filtro de categoría si no encontró nada
+            if (products.length === 0 && categoryId) {
+              const r1b = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false });
+              products = r1b.products;
+            }
+            // 3. Fallback AND regex con expansión si sigue sin resultados
             if (products.length === 0) {
               const expanded = expandKeywords(keywords);
-              const r2 = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false, exact: true });
+              const r2 = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false, exact: true, categoryId });
               products = r2.products;
             }
-            // 3. Sin número de modelo si sigue sin resultados
+            // 4. Sin número de modelo si sigue sin resultados
             if (products.length === 0 && keywords.some(k => /^\d+$/.test(k))) {
               const noNum = keywords.filter(k => !/^\d+$/.test(k));
               if (noNum.length > 0) {
-                const r3 = await getMongoProducts({ keywords: noNum, limit: 5, onlyAvailable: false });
+                const r3 = await getMongoProducts({ keywords: noNum, limit: 5, onlyAvailable: false, categoryId });
                 products = r3.products;
               }
             }
@@ -598,7 +642,10 @@ export async function POST(req: NextRequest) {
             const filtered = await filterProductsByRelevance(q, products, aiConfig?.groqApiKey as string | null);
             // Deduplicate by product id across queries
             const newProds = filtered.filter(p => !relevantProducts.find(r => r.id === p.id));
-            searchQueries.push({ label: keywords.join(" "), products: newProds });
+            const label = matchedCat
+              ? `${keywords.join(" ")} (en ${matchedCat.name})`
+              : keywords.join(" ");
+            searchQueries.push({ label, products: newProds });
             relevantProducts.push(...newProds);
           } catch (e) { console.warn("[mongo search]", e); }
         }
