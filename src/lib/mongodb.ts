@@ -244,6 +244,7 @@ export async function getMongoProducts(opts: {
   categoryId?: string;
   limit?: number;
   onlyAvailable?: boolean;
+  exact?: boolean; // if true: skip synonym expansion, go straight to AND regex
 } = {}): Promise<{ products: MongoProduct[]; categories: { id: string; name: string; icon?: string }[]; usdToArs: number }> {
   const db = await getMongoDB();
 
@@ -272,33 +273,39 @@ export async function getMongoProducts(opts: {
   let raw;
 
   if (opts.keywords?.length || opts.search) {
-    // Expand keywords with synonyms
     const rawKeywords = opts.keywords ?? (opts.search ? [opts.search] : []);
-    const expanded    = expandKeywords(rawKeywords);
 
-    // 1. Text index with forced AND ("+" prefix on each term)
-    try {
-      const textSearch = expanded.map((k) => `+${k}`).join(" ");
-      const textFilter = { ...baseFilter, $text: { $search: textSearch } };
-      raw = await db.collection("stock")
-        .find(textFilter, { projection: { score: { $meta: "textScore" } } })
-        .sort({ score: { $meta: "textScore" } })
-        .limit(opts.limit ?? 10)
-        .toArray();
-    } catch {
-      raw = [];
-    }
-
-    // 2. AND regex fallback (all keywords must appear in the name)
-    if (raw.length < 2) {
-      const andFilter = { ...baseFilter, ...buildSearchFilter(expanded) };
+    if (opts.exact) {
+      // EXACT mode: AND regex on raw keywords only — no expansion, no text index
+      const andFilter = { ...baseFilter, ...buildSearchFilter(rawKeywords) };
       raw = await db.collection("stock").find(andFilter).limit(opts.limit ?? 10).toArray();
-    }
+    } else {
+      const expanded = expandKeywords(rawKeywords);
 
-    // 3. OR regex fallback (at least one keyword matches) — last resort
-    if (raw.length === 0) {
-      const orFilter = { ...baseFilter, ...buildSearchFilterOr(expanded) };
-      raw = await db.collection("stock").find(orFilter).limit(opts.limit ?? 10).toArray();
+      // 1. Text index with forced AND ("+" prefix on each term)
+      try {
+        const textSearch = expanded.map((k) => `+${k}`).join(" ");
+        const textFilter = { ...baseFilter, $text: { $search: textSearch } };
+        raw = await db.collection("stock")
+          .find(textFilter, { projection: { score: { $meta: "textScore" } } })
+          .sort({ score: { $meta: "textScore" } })
+          .limit(opts.limit ?? 10)
+          .toArray();
+      } catch {
+        raw = [];
+      }
+
+      // 2. AND regex fallback (all keywords must appear in the name)
+      if (raw.length < 2) {
+        const andFilter = { ...baseFilter, ...buildSearchFilter(expanded) };
+        raw = await db.collection("stock").find(andFilter).limit(opts.limit ?? 10).toArray();
+      }
+
+      // 3. OR regex fallback (at least one keyword matches) — last resort
+      if (raw.length === 0) {
+        const orFilter = { ...baseFilter, ...buildSearchFilterOr(expanded) };
+        raw = await db.collection("stock").find(orFilter).limit(opts.limit ?? 10).toArray();
+      }
     }
   } else {
     raw = await db.collection("stock").find(baseFilter).limit(opts.limit ?? 300).toArray();

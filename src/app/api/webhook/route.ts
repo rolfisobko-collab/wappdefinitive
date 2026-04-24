@@ -580,19 +580,21 @@ export async function POST(req: NextRequest) {
           const keywords = extractKeywords(q);
           if (keywords.length === 0) continue;
           try {
-            // Search with raw keywords first (most precise — no synonym noise)
-            let { products } = await getMongoProducts({ keywords, limit: 3, onlyAvailable: false });
-            // Fallback 1: expand synonyms only if raw search returns nothing
+            // 1. Exact AND regex — raw keywords, sin expansión
+            let { products } = await getMongoProducts({ keywords, limit: 3, onlyAvailable: false, exact: true });
+            // 2. Expand synonyms si no encontró nada
             if (products.length === 0) {
               const expanded = expandKeywords(keywords);
-              const r2 = await getMongoProducts({ keywords: expanded, limit: 3, onlyAvailable: false });
+              const r2 = await getMongoProducts({ keywords: expanded, limit: 3, onlyAvailable: false, exact: true });
               products = r2.products;
             }
-            // Fallback 2: drop numeric model if still nothing (e.g. "modulo iphone" alone)
-            if (products.length === 0 && keywords.length > 2) {
+            // 3. Sin número de modelo (ej: solo "modulo iphone") si sigue sin resultados
+            if (products.length === 0 && keywords.some(k => /^\d+$/.test(k))) {
               const noNum = keywords.filter(k => !/^\d+$/.test(k));
-              const r3 = await getMongoProducts({ keywords: noNum, limit: 3, onlyAvailable: false });
-              products = r3.products;
+              if (noNum.length > 0) {
+                const r3 = await getMongoProducts({ keywords: noNum, limit: 3, onlyAvailable: false, exact: true });
+                products = r3.products;
+              }
             }
             // Deduplicate by product id across queries
             const newProds = products.filter(p => !relevantProducts.find(r => r.id === p.id));
@@ -669,6 +671,7 @@ export async function POST(req: NextRequest) {
           for (const product of relevantProducts.slice(0, 6)) {
               const caption =
                 `📦 *${product.name}*\n` +
+                (product.sku ? `🔢 SKU: ${product.sku}\n` : "") +
                 (product.category ? `🏷️ ${product.category}\n` : "") +
                 `💵 USD ${product.promoPrice ?? product.price}${product.promoPrice ? ` ~~${product.price}~~` : ""} | ARS ${(product.promoPriceARS ?? product.priceARS).toLocaleString("es-AR")}\n` +
                 (product.available ? `✅ Disponible` : `❌ Sin stock`);
