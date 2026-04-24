@@ -624,6 +624,20 @@ export async function POST(req: NextRequest) {
 
               try { await wa.sendProductCard(contact.phone, product.image, caption, cardButtons); }
               catch (e) { console.warn("[sendProductCard]", e); }
+
+              // Save card in Firestore with image + buttons metadata so the panel can render it
+              const cardMeta = JSON.stringify({
+                headerImage: product.image ?? null,
+                buttons: cardButtons,
+                isProductSearch: true,
+              });
+              const cardMsg = await createMessage({
+                conversationId: conversation.id,
+                direction: "outbound", sender: "ai", status: "sent",
+                content: caption,
+                metadata: cardMeta,
+              });
+              io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
             }
           }
         }

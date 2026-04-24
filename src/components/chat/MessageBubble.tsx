@@ -147,6 +147,69 @@ function ImageMessage({ mediaId, caption }: { mediaId: string; caption?: string 
   );
 }
 
+// ─── Product card (outbound) ─────────────────────────────────────────────────
+interface WAButton { id: string; title: string }
+interface ProductCardData {
+  image: string | null;
+  body: string;
+  buttons: WAButton[];
+}
+
+function ProductCard({ data, isAI, tick, time }: { data: ProductCardData; isAI: boolean; tick: React.ReactNode; time: string }) {
+  return (
+    <div className="w-[260px] rounded-2xl overflow-hidden shadow-sm bg-white">
+      {/* Image */}
+      {data.image && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={data.image} alt="" className="w-full h-40 object-cover" />
+      )}
+      {/* Body */}
+      <div className="px-3 pt-2 pb-1 bg-[#d9fdd3]">
+        {isAI && (
+          <div className="flex items-center gap-1 mb-0.5">
+            <Bot className="w-3 h-3 text-[#7c4dff]" />
+            <span className="text-[10px] text-[#7c4dff] font-semibold">IA</span>
+          </div>
+        )}
+        <p className="text-sm text-[#111b21] leading-relaxed whitespace-pre-wrap break-words">
+          <WAText text={data.body} />
+        </p>
+        <div className="flex items-center gap-1 justify-end mt-0.5">
+          <span className="text-[11px] text-[#667781]">{time}</span>
+          <span>{tick}</span>
+        </div>
+      </div>
+      {/* Buttons */}
+      {data.buttons.length > 0 && (
+        <div className="divide-y divide-[#e9edef]">
+          {data.buttons.map((b) => (
+            <div key={b.id} className="py-2 px-3 text-center text-sm text-[#00a5f4] font-medium bg-white">
+              {b.title}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Interactive button reply (inbound) ──────────────────────────────────────
+function InteractiveReply({ title, time }: { title: string; time: string }) {
+  return (
+    <div className="bg-white rounded-2xl rounded-bl-sm shadow-sm overflow-hidden max-w-[260px]">
+      <div className="px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[#00a5f4]">
+          <span className="text-lg">👆</span>
+          <span className="text-sm font-medium">{title}</span>
+        </div>
+        <div className="flex items-center gap-1 mt-0.5">
+          <span className="text-[11px] text-[#667781]">{time}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isOut = message.direction === "outbound";
   const isAI  = message.sender === "ai";
@@ -159,11 +222,44 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   }[message.status] ?? <Clock className="w-3 h-3 text-[#667781]" />;
 
   // Parse metadata
-  let meta: Record<string, string> = {};
+  let meta: Record<string, unknown> = {};
   try { if (message.metadata) meta = JSON.parse(message.metadata); } catch { /* noop */ }
 
   const isImage = message.type === "image" && meta.mediaId;
   const isAudio = message.type === "audio" && meta.mediaId;
+  const timeStr = formatMessageTime(new Date(message.createdAt));
+
+  // ── Interactive reply (button press by user) ──
+  if (message.type === "interactive" && !isOut) {
+    const title = message.content.replace(/^\[/, "").replace(/\]$/, "");
+    return (
+      <div className="flex items-end gap-1.5 px-4 py-0.5 justify-start">
+        <div className="w-7 h-7 rounded-full bg-[#dfe5e7] flex items-center justify-center flex-shrink-0 mb-1">
+          <User2 className="w-4 h-4 text-[#667781]" />
+        </div>
+        <InteractiveReply title={title} time={timeStr} />
+      </div>
+    );
+  }
+
+  // ── Product card (outbound with image + buttons) ──
+  // Detect: outbound message that has buttons embedded in metadata OR content has image header pattern
+  const metaButtons = meta.buttons as WAButton[] | undefined;
+  const metaImage   = meta.headerImage as string | undefined;
+  const hasCard = isOut && (metaButtons?.length || metaImage);
+
+  if (hasCard) {
+    const cardData: ProductCardData = {
+      image:   metaImage ?? null,
+      body:    message.content,
+      buttons: metaButtons ?? [],
+    };
+    return (
+      <div className="flex items-end gap-1.5 px-4 py-0.5 justify-end">
+        <ProductCard data={cardData} isAI={isAI} tick={tick} time={timeStr} />
+      </div>
+    );
+  }
 
   return (
     <div className={cn("flex items-end gap-1.5 px-4 py-0.5", isOut ? "justify-end" : "justify-start")}>
@@ -190,10 +286,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
         {/* Content */}
         {isImage ? (
-          <ImageMessage mediaId={meta.mediaId} caption={meta.caption || message.content !== "[Imagen]" ? message.content : undefined} />
+          <ImageMessage mediaId={meta.mediaId as string} caption={meta.caption as string || message.content !== "[Imagen]" ? message.content : undefined} />
         ) : isAudio ? (
           <div className="space-y-1.5">
-            <AudioPlayer mediaId={meta.mediaId} />
+            <AudioPlayer mediaId={meta.mediaId as string} />
             {message.content && message.content !== "[audio]" && message.content !== "[Audio]" && (
               <p className="text-[11px] text-[#667781] italic leading-relaxed">
                 📝 {message.content}
@@ -207,9 +303,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         )}
 
         <div className={cn("flex items-center gap-1 mt-0.5", isOut ? "justify-end" : "justify-start")}>
-          <span className="text-[11px] text-[#667781]">
-            {formatMessageTime(new Date(message.createdAt))}
-          </span>
+          <span className="text-[11px] text-[#667781]">{timeStr}</span>
           {isOut && <span>{tick}</span>}
         </div>
       </div>
