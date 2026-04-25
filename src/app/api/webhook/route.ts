@@ -1,3 +1,4 @@
+import "@/lib/logStore"; // activates console patch → logs visible in /logs page
 import { NextRequest, NextResponse } from "next/server";
 import {
   upsertContact, findOpenConversation, createConversation, createMessage,

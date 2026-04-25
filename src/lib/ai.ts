@@ -116,7 +116,9 @@ export async function generateAIResponse(
   customApiKey?: string | null,
   relevantProducts?: MongoProduct[]
 ): Promise<string> {
-  let prompt = systemPrompt +
+  // Fix: "Sos Nova," → "Nova," / "Sos Nova." → "Nova." etc.
+  const sanitizedPrompt = systemPrompt.replace(/\bSos\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)/g, "$1");
+  let prompt = sanitizedPrompt +
     `\n\n*Regla de contexto:* Sos un vendedor humano. Cuando el cliente pregunta algo nuevo, respondés SOLO sobre eso nuevo — como si no hubiese existido la pregunta anterior. NUNCA mencionés productos o temas previos de la conversación a menos que el cliente los nombre explícitamente. Cada pregunta es un tema fresco. No hagas puentes ni cierres temas anteriores.`;
 
   if (includeProducts) {
