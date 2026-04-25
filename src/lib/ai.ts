@@ -39,7 +39,12 @@ export async function filterProductsByRelevance(
 Productos encontrados:
 ${list}
 
-Respondé SOLO con los números de los que SÍ coinciden exactamente con lo pedido (ej: "1,3"). Solo respondé "ninguno" si estás 100% seguro de que ninguno coincide. En caso de duda, incluí el número. Sin explicación.`;
+Reglas para decidir cuáles incluir:
+1. Si el producto es el modelo exacto → incluir.
+2. Si el cliente pide una variante que no existe (ej: S23 Ultra) pero hay el modelo base (S23) → incluir el base.
+3. Si el producto es claramente de otra marca o modelo incompatible → excluir.
+4. En caso de duda → incluir.
+5. Respondé SOLO con los números separados por coma (ej: "1,3"). Solo respondé "ninguno" si estás 100% seguro de que NINGUNO tiene relación. Sin explicación.`;
 
   try {
     const res = await groq.chat.completions.create({

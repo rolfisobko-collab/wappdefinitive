@@ -282,7 +282,10 @@ export async function POST(req: NextRequest) {
             const media = await downloadWAMedia(audioId, waConfig.accessToken);
             if (media) {
               const txt = await transcribeAudio(media.buffer, media.mime);
-              if (txt) transcribedText = txt;
+              if (txt) {
+                transcribedText = txt;
+                console.log(`[WH] 🎤 audio transcripto: ${JSON.stringify(txt)}`);
+              }
             }
           } catch (e) { console.warn("[audio transcribe]", e); }
         }
@@ -668,7 +671,6 @@ export async function POST(req: NextRequest) {
         console.log(`[WH] hasProductResults=${hasProductResults} total=${relevantProducts.length}`);
 
         if (!hasProductResults) {
-          // Pure conversational response
           const aiText = await generateAIResponse(
             aiConfig.systemPrompt as string,
             history,
@@ -681,6 +683,7 @@ export async function POST(req: NextRequest) {
             [],
           );
 
+          console.log(`[WH] 🤖 AI response: ${JSON.stringify(aiText.slice(0, 200))}`);
           const aiMsg = await createMessage({
             conversationId: conversation.id,
             direction: "outbound", sender: "ai", status: "sent", content: aiText,

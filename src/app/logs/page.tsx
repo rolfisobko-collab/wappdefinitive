@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Trash2, Pause, Play, Download, RefreshCw } from "lucide-react";
+import { Trash2, Pause, Play, Download, RefreshCw, Copy, Check } from "lucide-react";
 
 interface LogEntry {
   id: number;
@@ -29,11 +29,12 @@ export default function LogsPage() {
   const [paused, setPaused] = useState(false);
   const [filter, setFilter] = useState("");
   const [levelFilter, setLevelFilter] = useState<"all" | LogEntry["level"]>("all");
+  const [copied, setCopied] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pausedRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
 
-  pausedRef.current = paused;
+  const connectRef = useRef<(() => void) | null>(null);
 
   const connect = useCallback(() => {
     esRef.current?.close();
@@ -51,9 +52,17 @@ export default function LogsPage() {
     };
     es.onerror = () => {
       es.close();
-      setTimeout(connect, 3000);
+      setTimeout(() => connectRef.current?.(), 3000);
     };
   }, []);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
 
   useEffect(() => {
     connect();
@@ -78,6 +87,14 @@ export default function LogsPage() {
 
   function clearLogs() {
     setLogs([]);
+  }
+
+  function copyLogs() {
+    const text = filtered.map((l) => `[${l.ts}] [${l.level.toUpperCase()}] ${l.msg}`).join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }
 
   function downloadLogs() {
@@ -139,6 +156,14 @@ export default function LogsPage() {
           <span className="hidden sm:inline">Reconectar</span>
         </button>
 
+        <button
+          onClick={copyLogs}
+          title="Copiar al portapapeles"
+          className="flex items-center gap-1 px-2 py-1 rounded bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] transition-colors"
+        >
+          {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3 text-[#58a6ff]" />}
+          <span className="hidden sm:inline">{copied ? "Copiado!" : "Copiar"}</span>
+        </button>
         <button
           onClick={downloadLogs}
           title="Descargar"
