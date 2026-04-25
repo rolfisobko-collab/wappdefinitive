@@ -254,6 +254,7 @@ export async function POST(req: NextRequest) {
     const waConfig = await getWAConfig() as Record<string, string> | null;
 
     for (const msg of parsed) {
+      console.log(`[WH] ▶ from=${msg.from} type=${msg.type} text=${JSON.stringify(msg.text?.slice(0,80))}`);
       const contact  = await upsertContact(msg.from, msg.contactName);
       let conversation = await findOpenConversation(contact.id);
       if (!conversation) conversation = await createConversation(contact.id);
@@ -605,30 +606,35 @@ export async function POST(req: NextRequest) {
 
       if (isProductQuery(textForSearch)) {
         const queries = splitProductQueries(textForSearch);
+        console.log(`[WH] 🔍 product query detected, sub-queries=${queries.length}:`, queries);
         for (const q of queries) {
           const keywords = extractKeywords(q);
-          if (keywords.length === 0) continue;
+          if (keywords.length === 0) { console.log(`[WH] ⚠️  no keywords for query: ${q}`); continue; }
+          console.log(`[WH] 🔑 keywords=[${keywords.join(",")}] for q=${JSON.stringify(q)}`);
           try {
-            // Detectar categoría hint para filtrar más preciso
             const catHint = detectCategoryHint(keywords);
             const { categories } = await getMongoProducts({ limit: 1 });
             const matchedCat = catHint
               ? categories.find(c => c.name.toLowerCase().includes(catHint))
               : null;
             const categoryId = matchedCat?.id ?? undefined;
+            console.log(`[WH] 🏷️  catHint=${catHint} matchedCat=${matchedCat?.name ?? "none"} categoryId=${categoryId ?? "none"}`);
 
             // 1. Atlas Search con keywords + categoría si se detectó
             let { products } = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false, categoryId });
+            console.log(`[WH] [1] Atlas+cat results=${products.length}:`, products.map(p=>p.name));
             // 2. Sin filtro de categoría si no encontró nada
             if (products.length === 0 && categoryId) {
               const r1b = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false });
               products = r1b.products;
+              console.log(`[WH] [2] Atlas sin cat results=${products.length}:`, products.map(p=>p.name));
             }
             // 3. Fallback AND regex con expansión si sigue sin resultados
             if (products.length === 0) {
               const expanded = expandKeywords(keywords);
               const r2 = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false, exact: true, categoryId });
               products = r2.products;
+              console.log(`[WH] [3] regex expanded results=${products.length}:`, products.map(p=>p.name));
             }
             // 4. Sin número de modelo si sigue sin resultados
             if (products.length === 0 && keywords.some(k => /^\d+$/.test(k))) {
@@ -636,18 +642,19 @@ export async function POST(req: NextRequest) {
               if (noNum.length > 0) {
                 const r3 = await getMongoProducts({ keywords: noNum, limit: 5, onlyAvailable: false, categoryId });
                 products = r3.products;
+                console.log(`[WH] [4] no-num results=${products.length}:`, products.map(p=>p.name));
               }
             }
-            // Validación IA: filtra productos que no coinciden con lo pedido
+            console.log(`[WH] 🤖 AI validation input=${products.length} products for query=${JSON.stringify(q)}`);
             const filtered = await filterProductsByRelevance(q, products, aiConfig?.groqApiKey as string | null);
-            // Deduplicate by product id across queries
+            console.log(`[WH] ✅ AI kept=${filtered.length}/${products.length}:`, filtered.map(p=>p.name));
             const newProds = filtered.filter(p => !relevantProducts.find(r => r.id === p.id));
             const label = matchedCat
               ? `${keywords.join(" ")} (en ${matchedCat.name})`
               : keywords.join(" ");
             searchQueries.push({ label, products: newProds });
             relevantProducts.push(...newProds);
-          } catch (e) { console.warn("[mongo search]", e); }
+          } catch (e) { console.error("[WH] ❌ mongo search error:", e); }
         }
       }
 
@@ -656,8 +663,8 @@ export async function POST(req: NextRequest) {
       const history = buildAIHistory(rawMsgs);
 
       try {
-        // ── If product search found results → skip AI text, only send cards ──
         const hasProductResults = relevantProducts.length > 0;
+        console.log(`[WH] hasProductResults=${hasProductResults} total=${relevantProducts.length}`);
 
         if (!hasProductResults) {
           // Pure conversational response
@@ -681,6 +688,7 @@ export async function POST(req: NextRequest) {
           io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: aiMsg });
 
           if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+            console.log(`[WH] 💬 sending AI text to ${contact.phone}, len=${aiText.length}`);
             const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
             try {
               const cartCheck = await getCart(conversation.id);
@@ -690,9 +698,10 @@ export async function POST(req: NextRequest) {
               } else {
                 await wa.sendTextMessage(contact.phone, aiText);
               }
+              console.log(`[WH] ✅ AI text sent OK`);
             } catch (e) {
-              console.error("[WA sendText]", e);
-              try { await wa.sendTextMessage(contact.phone, aiText); } catch { /* ignore */ }
+              console.error("[WH] ❌ WA sendText error:", e);
+              try { await wa.sendTextMessage(contact.phone, aiText); } catch(e2) { console.error("[WH] ❌ WA sendText retry error:", e2); }
             }
           }
         }
@@ -727,17 +736,29 @@ export async function POST(req: NextRequest) {
                 ? [{ id: `cart_add_${product.id}`, title: "🛒 Agregar" }, { id: "cart_view", title: "Ver carrito" }]
                 : [{ id: "catalog_more", title: "🔍 Ver más" }];
 
+              console.log(`[WH] 📤 sending card to=${contact.phone} sku=${product.sku} img=${product.image?.slice(0,60) ?? "null"} captionLen=${caption.length}`);
               try {
                 await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
+                console.log(`[WH] ✅ card sent OK: ${product.name}`);
               } catch (cardErr: unknown) {
-                const errMsg = cardErr instanceof Error ? cardErr.message : String(cardErr);
-                console.error("[sendProductCard failed]", errMsg);
-                // Si falla con imagen, intentar sin imagen
+                const axiosData = (cardErr as Record<string,unknown>)?.response as Record<string,unknown> | undefined;
+                console.error(`[WH] ❌ card FAILED: ${product.name}`, {
+                  message: cardErr instanceof Error ? cardErr.message : String(cardErr),
+                  status: axiosData?.status,
+                  data: JSON.stringify(axiosData?.data ?? "").slice(0, 400),
+                });
                 if (product.image) {
+                  console.log(`[WH] 🔄 retrying card without image: ${product.name}`);
                   try {
                     await wa.sendProductCard(contact.phone, null, caption, cardButtons);
-                  } catch (noImgErr) {
-                    console.error("[sendProductCard no-image also failed]", noImgErr);
+                    console.log(`[WH] ✅ card sent OK (no image): ${product.name}`);
+                  } catch (noImgErr: unknown) {
+                    const d2 = (noImgErr as Record<string,unknown>)?.response as Record<string,unknown> | undefined;
+                    console.error(`[WH] ❌ card FAILED even without image:`, {
+                      message: noImgErr instanceof Error ? noImgErr.message : String(noImgErr),
+                      status: d2?.status,
+                      data: JSON.stringify(d2?.data ?? "").slice(0, 400),
+                    });
                   }
                 }
               }
