@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useChatStore } from "@/store/chatStore";
 import { ConversationItem } from "./ConversationItem";
 import { ConversationListItem } from "@/lib/types";
-import { Search, Plus, MessageSquare, Settings, Bot, X, Filter } from "lucide-react";
+import { Search, Plus, MessageSquare, Settings, Bot, X, Filter, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
@@ -101,6 +101,15 @@ export function ConversationSidebar({ onSelectConversation }: ConversationSideba
           </div>
         </div>
         <div className="flex items-center gap-0.5">
+          <a
+            href="/logs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-1.5 text-white/30 hover:text-green-400 hover:bg-white/10 rounded-full transition-colors"
+            title="Terminal / Logs en tiempo real"
+          >
+            <Terminal className="w-4 h-4" />
+          </a>
           <button
             onClick={() => setSidebarTab("settings" as "chats" | "products" | "settings")}
             className="p-1.5 text-white/30 hover:text-white/70 hover:bg-white/10 rounded-full transition-colors"
