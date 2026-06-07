@@ -261,35 +261,7 @@ export async function POST(req: NextRequest) {
     const body: WAWebhookBody = await req.json();
     if (body.object !== "whatsapp_business_account") return NextResponse.json({ status: "ignored" });
 
-    const statusUpdates = body.entry?.flatMap((entry) =>
-      entry.changes?.flatMap((change) => change.value?.statuses ?? []) ?? []
-    ) ?? [];
-
-    for (const status of statusUpdates) {
-      const nextStatus = ["sent", "delivered", "read", "failed"].includes(status.status)
-        ? status.status
-        : null;
-      if (!nextStatus) continue;
-
-      const existing = await findMessageByWAId(status.id);
-      if (!existing) {
-        console.log(`[WH status] ignored unknown message=${status.id} status=${status.status}`);
-        continue;
-      }
-
-      const metadata = status.status === "failed"
-        ? JSON.stringify({ whatsappStatus: status })
-        : undefined;
-      await updateMessage(existing.id as string, {
-        status: nextStatus,
-        metadata,
-      });
-      console.log(`[WH status] message=${status.id} status=${status.status} recipient=${status.recipient_id}`);
-    }
-
     const parsed = parseIncomingWebhook(body);
-    if (parsed.length === 0) return NextResponse.json({ status: "ok", statuses: statusUpdates.length });
-
     const waConfig = await getWAConfig() as Record<string, string> | null;
 
     for (const msg of parsed) {
