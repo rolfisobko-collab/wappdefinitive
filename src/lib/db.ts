@@ -165,6 +165,29 @@ export async function createMessage(data: {
 
 export async function updateMessage(id: string, updates: Record<string, unknown>) {
   await updateDoc(doc(db, "messages", id), stripUndefined(updates));
+  const msgSnap = await getDoc(doc(db, "messages", id));
+  if (!msgSnap.exists()) return;
+
+  const msg = { id: msgSnap.id, ...msgSnap.data() } as Record<string, unknown>;
+  const conversationId = msg.conversationId as string | undefined;
+  if (!conversationId) return;
+
+  const convRef = doc(db, "conversations", conversationId);
+  const convSnap = await getDoc(convRef);
+  if (!convSnap.exists()) return;
+
+  const conv = convSnap.data();
+  const lastMessage = conv.lastMessage as Record<string, unknown> | undefined;
+  if (lastMessage?.id !== id) return;
+
+  await updateDoc(convRef, {
+    lastMessage: {
+      ...lastMessage,
+      ...stripUndefined(updates),
+      id,
+    },
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function findMessageByWAId(waMessageId: string) {

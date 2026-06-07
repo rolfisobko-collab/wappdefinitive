@@ -2,7 +2,7 @@ import "@/lib/logStore"; // activates console patch → logs visible in /logs pa
 import { NextRequest, NextResponse } from "next/server";
 import {
   upsertContact, findOpenConversation, createConversation, createMessage,
-  findMessageByWAId, updateConversation, getAIConfig, getWAConfig,
+  findMessageByWAId, updateConversation, updateMessage, getAIConfig, getWAConfig,
   addToCart, getCart, removeFromCart,
 } from "@/lib/db";
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
@@ -19,6 +19,15 @@ type GlobalWithIO = {
     emit: (e: string, d: unknown) => void;
   };
 };
+
+function getMetaError(error: unknown) {
+  const err = error as { response?: { status?: number; data?: unknown }; message?: string };
+  return {
+    status: err.response?.status ?? null,
+    data: err.response?.data ?? null,
+    message: err.message ?? "WhatsApp send failed",
+  };
+}
 
 // ─── Intent detection ───────────────────────────────────────────────────────
 
@@ -651,7 +660,7 @@ export async function POST(req: NextRequest) {
           console.log(`[WH] 🤖 AI response: ${JSON.stringify(aiText.slice(0, 200))}`);
           const aiMsg = await createMessage({
             conversationId: conversation.id,
-            direction: "outbound", sender: "ai", status: "sent", content: aiText,
+            direction: "outbound", sender: "ai", status: "pending", content: aiText,
             metadata: null,
           });
           io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: aiMsg });
@@ -663,15 +672,30 @@ export async function POST(req: NextRequest) {
               const cartCheck = await getCart(conversation.id);
               const cartHasItems = ((cartCheck as Record<string,unknown>)?.items as unknown[] | undefined)?.length ?? 0;
               if (cartHasItems > 0) {
-                await wa.sendButtons(contact.phone, aiText, [{ id: "cart_view", title: "🛒 Ver carrito" }]);
+                const waRes = await wa.sendButtons(contact.phone, aiText, [{ id: "cart_view", title: "🛒 Ver carrito" }]);
+                const waMessageId = waRes?.messages?.[0]?.id ?? null;
+                await updateMessage(aiMsg.id, { status: "sent", waMessageId });
               } else {
-                await wa.sendTextMessage(contact.phone, aiText);
+                const waRes = await wa.sendTextMessage(contact.phone, aiText);
+                const waMessageId = waRes?.messages?.[0]?.id ?? null;
+                await updateMessage(aiMsg.id, { status: "sent", waMessageId });
               }
               console.log(`[WH] ✅ AI text sent OK`);
             } catch (e) {
-              console.error("[WH] ❌ WA sendText error:", e);
-              try { await wa.sendTextMessage(contact.phone, aiText); } catch(e2) { console.error("[WH] ❌ WA sendText retry error:", e2); }
+              const detail = getMetaError(e);
+              console.error("[WH] ❌ WA sendText error:", detail);
+              try {
+                const waRes = await wa.sendTextMessage(contact.phone, aiText);
+                const waMessageId = waRes?.messages?.[0]?.id ?? null;
+                await updateMessage(aiMsg.id, { status: "sent", waMessageId });
+              } catch(e2) {
+                const retryDetail = getMetaError(e2);
+                console.error("[WH] ❌ WA sendText retry error:", retryDetail);
+                await updateMessage(aiMsg.id, { status: "failed", metadata: JSON.stringify(retryDetail) });
+              }
             }
+          } else {
+            await updateMessage(aiMsg.id, { status: "failed", metadata: JSON.stringify({ message: "Falta configuracion WhatsApp para enviar" }) });
           }
         }
 
@@ -685,12 +709,17 @@ export async function POST(req: NextRequest) {
             const searchLabel = `🔍 *Buscando:* ${sq.label}`;
             const searchLabelMsg = await createMessage({
               conversationId: conversation.id,
-              direction: "outbound", sender: "ai", status: "sent",
+              direction: "outbound", sender: "ai", status: "pending",
               content: searchLabel,
               metadata: JSON.stringify({ isProductSearch: true }),
             });
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: searchLabelMsg });
-            try { await wa.sendTextMessage(contact.phone, searchLabel); } catch { /* ignore */ }
+            try {
+              const waRes = await wa.sendTextMessage(contact.phone, searchLabel);
+              await updateMessage(searchLabelMsg.id, { status: "sent", waMessageId: waRes?.messages?.[0]?.id ?? null });
+            } catch (e) {
+              await updateMessage(searchLabelMsg.id, { status: "failed", metadata: JSON.stringify(getMetaError(e)) });
+            }
           }
 
           for (const product of relevantProducts.slice(0, 6)) {
@@ -705,9 +734,23 @@ export async function POST(req: NextRequest) {
                 ? [{ id: `cart_add_${product.id}`, title: "🛒 Agregar" }, { id: "cart_view", title: "Ver carrito" }]
                 : [{ id: "catalog_more", title: "🔍 Ver más" }];
 
+              const cardMeta = JSON.stringify({
+                headerImage: product.image ?? null,
+                buttons: cardButtons,
+                isProductSearch: true,
+              });
+              const cardMsg = await createMessage({
+                conversationId: conversation.id,
+                direction: "outbound", sender: "ai", status: "pending",
+                content: caption,
+                metadata: cardMeta,
+              });
+              io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
+
               console.log(`[WH] 📤 sending card to=${contact.phone} sku=${product.sku} img=${product.image?.slice(0,60) ?? "null"} captionLen=${caption.length}`);
               try {
-                await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
+                const waRes = await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
+                await updateMessage(cardMsg.id, { status: "sent", waMessageId: waRes?.messages?.[0]?.id ?? null });
                 console.log(`[WH] ✅ card sent OK: ${product.name}`);
               } catch (cardErr: unknown) {
                 const axiosData = (cardErr as Record<string,unknown>)?.response as Record<string,unknown> | undefined;
@@ -719,7 +762,12 @@ export async function POST(req: NextRequest) {
                 if (product.image) {
                   console.log(`[WH] 🔄 retrying card without image: ${product.name}`);
                   try {
-                    await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+                    const waRes = await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+                    await updateMessage(cardMsg.id, {
+                      status: "sent",
+                      waMessageId: waRes?.messages?.[0]?.id ?? null,
+                      metadata: JSON.stringify({ headerImage: null, buttons: cardButtons, isProductSearch: true }),
+                    });
                     console.log(`[WH] ✅ card sent OK (no image): ${product.name}`);
                   } catch (noImgErr: unknown) {
                     const d2 = (noImgErr as Record<string,unknown>)?.response as Record<string,unknown> | undefined;
@@ -728,22 +776,12 @@ export async function POST(req: NextRequest) {
                       status: d2?.status,
                       data: JSON.stringify(d2?.data ?? "").slice(0, 400),
                     });
+                    await updateMessage(cardMsg.id, { status: "failed", metadata: JSON.stringify({ ...getMetaError(noImgErr), headerImage: product.image ?? null, buttons: cardButtons, isProductSearch: true }) });
                   }
+                } else {
+                  await updateMessage(cardMsg.id, { status: "failed", metadata: JSON.stringify({ ...getMetaError(cardErr), headerImage: null, buttons: cardButtons, isProductSearch: true }) });
                 }
               }
-
-              const cardMeta = JSON.stringify({
-                headerImage: product.image ?? null,
-                buttons: cardButtons,
-                isProductSearch: true,
-              });
-              const cardMsg = await createMessage({
-                conversationId: conversation.id,
-                direction: "outbound", sender: "ai", status: "sent",
-                content: caption,
-                metadata: cardMeta,
-              });
-              io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
             }
         }
       } catch (e) { console.error("[AI Error]", e); }
