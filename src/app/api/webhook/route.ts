@@ -9,7 +9,6 @@ import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } fro
 import { generateAIResponse, transcribeAudio, filterProductsByRelevance, AIMessage } from "@/lib/ai";
 import { getMongoProducts, getMongoProductById, createOrderInMongo, updateOrderStatus, expandKeywords, MongoProduct } from "@/lib/mongodb";
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
-import { searchAltaProducts } from "@/lib/altaSearch";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
 
@@ -604,26 +603,62 @@ export async function POST(req: NextRequest) {
 
       const aiConfig = await getAIConfig() as Record<string, unknown>;
 
-      // Deterministic Alta search: Raulbot-style classifier + Mongo catalog.
-      // AI stays around the flow, but product choice comes from this bot search.
+      // Extract keywords and search relevant products — ONLY for actual product queries
       let relevantProducts: MongoProduct[] = [];
+      // Map each query string to its found products (for searching labels)
       const searchQueries: Array<{ label: string; products: MongoProduct[] }> = [];
 
       if (isProductQuery(textForSearch)) {
-        try {
-          const result = await searchAltaProducts(textForSearch, 5000);
-          const products = (result.products ?? []) as MongoProduct[];
-          relevantProducts = products.filter((product, idx, arr) =>
-            arr.findIndex((other) => other.id === product.id) === idx
-          ).slice(0, 6);
-          const label = result.query?.detected?.length
-            ? result.query.detected.join(" - ")
-            : textForSearch;
-          searchQueries.push({ label, products: relevantProducts });
-          console.log(`[WH] AltaSearch mode=${result.mode} total=${result.total} available=${result.availableTotal} kept=${relevantProducts.length}`);
-          console.log(`[WH] AltaSearch products:`, relevantProducts.map(p => p.name));
-        } catch (e) {
-          console.error("[WH] AltaSearch error:", e);
+        const queries = splitProductQueries(textForSearch);
+        console.log(`[WH] 🔍 product query detected, sub-queries=${queries.length}:`, queries);
+        for (const q of queries) {
+          const keywords = extractKeywords(q);
+          if (keywords.length === 0) { console.log(`[WH] ⚠️  no keywords for query: ${q}`); continue; }
+          console.log(`[WH] 🔑 keywords=[${keywords.join(",")}] for q=${JSON.stringify(q)}`);
+          try {
+            const catHint = detectCategoryHint(keywords);
+            const { categories } = await getMongoProducts({ limit: 1 });
+            const matchedCat = catHint
+              ? categories.find(c => c.name.toLowerCase().includes(catHint))
+              : null;
+            const categoryId = matchedCat?.id ?? undefined;
+            console.log(`[WH] 🏷️  catHint=${catHint} matchedCat=${matchedCat?.name ?? "none"} categoryId=${categoryId ?? "none"}`);
+
+            // 1. Atlas Search con keywords + categoría si se detectó
+            let { products } = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false, categoryId });
+            console.log(`[WH] [1] Atlas+cat results=${products.length}:`, products.map(p=>p.name));
+            // 2. Sin filtro de categoría si no encontró nada
+            if (products.length === 0 && categoryId) {
+              const r1b = await getMongoProducts({ keywords, limit: 5, onlyAvailable: false });
+              products = r1b.products;
+              console.log(`[WH] [2] Atlas sin cat results=${products.length}:`, products.map(p=>p.name));
+            }
+            // 3. Fallback AND regex con expansión si sigue sin resultados
+            if (products.length === 0) {
+              const expanded = expandKeywords(keywords);
+              const r2 = await getMongoProducts({ keywords: expanded, limit: 5, onlyAvailable: false, exact: true, categoryId });
+              products = r2.products;
+              console.log(`[WH] [3] regex expanded results=${products.length}:`, products.map(p=>p.name));
+            }
+            // 4. Sin número de modelo si sigue sin resultados
+            if (products.length === 0 && keywords.some(k => /^\d+$/.test(k))) {
+              const noNum = keywords.filter(k => !/^\d+$/.test(k));
+              if (noNum.length > 0) {
+                const r3 = await getMongoProducts({ keywords: noNum, limit: 5, onlyAvailable: false, categoryId });
+                products = r3.products;
+                console.log(`[WH] [4] no-num results=${products.length}:`, products.map(p=>p.name));
+              }
+            }
+            console.log(`[WH] 🤖 AI validation input=${products.length} products for query=${JSON.stringify(q)}`);
+            const filtered = await filterProductsByRelevance(q, products, aiConfig?.groqApiKey as string | null);
+            console.log(`[WH] ✅ AI kept=${filtered.length}/${products.length}:`, filtered.map(p=>p.name));
+            const newProds = filtered.filter(p => !relevantProducts.find(r => r.id === p.id));
+            const label = matchedCat
+              ? `${keywords.join(" ")} (en ${matchedCat.name})`
+              : keywords.join(" ");
+            searchQueries.push({ label, products: newProds });
+            relevantProducts.push(...newProds);
+          } catch (e) { console.error("[WH] ❌ mongo search error:", e); }
         }
       }
 
