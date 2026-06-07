@@ -6,13 +6,7 @@ export async function GET() {
     const config = await getWAConfig();
     if (!config) return NextResponse.json(null);
     const c = config as Record<string, unknown>;
-    return NextResponse.json({
-      id: "wa",
-      phoneNumberId: c.phoneNumberId,
-      businessId: c.businessId,
-      verifyToken: c.verifyToken,
-      hasAccessToken: Boolean(c.accessToken),
-    });
+    return NextResponse.json({ id: "wa", phoneNumberId: c.phoneNumberId, businessId: c.businessId, verifyToken: c.verifyToken });
   } catch (error) {
     console.error("[GET /api/wa-config]", error);
     return NextResponse.json({ error: "Error" }, { status: 500 });
