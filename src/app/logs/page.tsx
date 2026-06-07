@@ -45,6 +45,8 @@ export default function LogsPage() {
       try {
         const entry: LogEntry = JSON.parse(e.data);
         setLogs((prev) => {
+          const signature = `${entry.id}|${entry.ts}|${entry.level}|${entry.msg}`;
+          if (prev.some((l) => `${l.id}|${l.ts}|${l.level}|${l.msg}` === signature)) return prev;
           const next = [...prev, entry];
           return next.length > 500 ? next.slice(-500) : next;
         });
@@ -190,9 +192,9 @@ export default function LogsPage() {
             Esperando eventos... Mandá un mensaje de WhatsApp para ver los logs.
           </div>
         )}
-        {filtered.map((l) => (
+        {filtered.map((l, index) => (
           <div
-            key={l.id}
+            key={`${l.id}-${l.ts}-${index}`}
             className={`flex gap-2 items-start py-[2px] px-1 rounded hover:bg-[#161b22] transition-colors ${l.level === "error" ? "bg-red-950/20" : ""}`}
           >
             <span className="text-[#484f58] shrink-0 w-[88px]">{fmtTime(l.ts)}</span>
