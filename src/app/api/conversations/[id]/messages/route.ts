@@ -10,6 +10,15 @@ function phone(conv: unknown): string {
   return ((conv as AnyMap).contact as AnyMap)?.phone as string ?? "";
 }
 
+function metaError(error: unknown): AnyMap {
+  const err = error as { response?: { status?: number; data?: unknown }; message?: string };
+  return {
+    status: err.response?.status ?? null,
+    data: err.response?.data ?? null,
+    message: err.message ?? "WhatsApp send failed",
+  };
+}
+
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: conversationId } = await params;
@@ -23,7 +32,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       conversationId, content, type,
       direction: "outbound",
       sender: isManual ? "agent" : "ai",
-      status: "sent",
+      status: "pending",
     });
 
     const waConfig = await getWAConfig() as AnyMap | null;
@@ -31,8 +40,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       try {
         const wa = getWAClient(waConfig.phoneNumberId as string, waConfig.accessToken as string);
         const waRes = await wa.sendTextMessage(phone(conversation), content);
-        if (waRes?.messages?.[0]?.id) await updateMessage(message.id, { waMessageId: waRes.messages[0].id });
-      } catch (e) { console.warn("[WA]", e); }
+        const waMessageId = waRes?.messages?.[0]?.id ?? null;
+        await updateMessage(message.id, { status: "sent", waMessageId });
+        message.status = "sent";
+        message.waMessageId = waMessageId;
+      } catch (e) {
+        const detail = metaError(e);
+        console.error("[WA send manual failed]", detail);
+        await updateMessage(message.id, { status: "failed", metadata: JSON.stringify(detail) });
+        message.status = "failed";
+        message.metadata = JSON.stringify(detail);
+        return NextResponse.json({ error: "WhatsApp rechazo el envio", detail, message }, { status: 502 });
+      }
+    } else {
+      const detail = { message: "Falta phoneNumberId o accessToken de WhatsApp" };
+      console.error("[WA send manual skipped]", detail);
+      await updateMessage(message.id, { status: "failed", metadata: JSON.stringify(detail) });
+      message.status = "failed";
+      message.metadata = JSON.stringify(detail);
+      return NextResponse.json({ error: "WhatsApp no configurado para enviar", detail, message }, { status: 400 });
     }
 
     const io = (global as unknown as GlobalWithIO).io;
@@ -75,7 +101,13 @@ export async function PUT(_req: Request, { params }: { params: Promise<{ id: str
       try {
         const wa = getWAClient(waConfig.phoneNumberId as string, waConfig.accessToken as string);
         await wa.sendTextMessage(phone(conversation), aiText);
-      } catch (e) { console.warn("[WA]", e); }
+      } catch (e) {
+        const detail = metaError(e);
+        console.error("[WA send AI failed]", detail);
+        await updateMessage(message.id, { status: "failed", metadata: JSON.stringify(detail) });
+        message.status = "failed";
+        message.metadata = JSON.stringify(detail);
+      }
     }
 
     const io = (global as unknown as GlobalWithIO).io;

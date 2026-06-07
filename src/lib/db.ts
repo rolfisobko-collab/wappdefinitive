@@ -268,12 +268,26 @@ export async function saveAIConfig(data: Record<string, unknown>) {
 
 export async function getWAConfig() {
   const snap = await getDoc(doc(db, "config", "wa"));
-  if (!snap.exists()) return null;
-  return { id: "wa", ...snap.data() };
+  const stored = snap.exists() ? snap.data() : {};
+  const config = {
+    id: "wa",
+    ...stored,
+    phoneNumberId: stored.phoneNumberId ?? process.env.WA_PHONE_NUMBER_ID ?? process.env.WHATSAPP_PHONE_NUMBER_ID ?? null,
+    businessId: stored.businessId ?? process.env.WA_BUSINESS_ID ?? process.env.WHATSAPP_BUSINESS_ID ?? null,
+    verifyToken: stored.verifyToken ?? process.env.WA_VERIFY_TOKEN ?? process.env.WHATSAPP_VERIFY_TOKEN ?? null,
+    accessToken: stored.accessToken ?? process.env.WA_ACCESS_TOKEN ?? process.env.WHATSAPP_ACCESS_TOKEN ?? null,
+  };
+
+  if (!config.phoneNumberId && !config.accessToken && !config.verifyToken && !config.businessId) return null;
+  return config;
 }
 
 export async function saveWAConfig(data: Record<string, unknown>) {
-  await setDoc(doc(db, "config", "wa"), { ...data, updatedAt: serverTimestamp() }, { merge: true });
+  const cleanData = { ...data };
+  if (typeof cleanData.accessToken === "string" && cleanData.accessToken.trim() === "") {
+    delete cleanData.accessToken;
+  }
+  await setDoc(doc(db, "config", "wa"), { ...cleanData, updatedAt: serverTimestamp() }, { merge: true });
 }
 
 // ─── CART ──────────────────────────────────────────────────────────────────
