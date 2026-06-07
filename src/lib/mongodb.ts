@@ -1,6 +1,9 @@
 import { MongoClient, Db } from "mongodb";
+import dns from "dns";
 
-const _uri = "mongodb+srv://leandrosobko_db_user:39kokOttcCd8gZn1@cluster0.qkjc22r.mongodb.net/test?retryWrites=true&w=majority";
+dns.setServers((process.env.NODE_DNS_SERVERS ?? "192.168.1.1,8.8.8.8,1.1.1.1").split(","));
+
+const _uri = process.env.MONGODB_URI || "mongodb://leandrosobko_db_user:39kokOttcCd8gZn1@ac-7pyfrbt-shard-00-00.qkjc22r.mongodb.net:27017,ac-7pyfrbt-shard-00-01.qkjc22r.mongodb.net:27017,ac-7pyfrbt-shard-00-02.qkjc22r.mongodb.net:27017/test?ssl=true&authSource=admin&retryWrites=true&w=majority";
 const DB_NAME = "test";
 
 let cachedClient: MongoClient | null = null;
