@@ -5,6 +5,8 @@ import { useChatStore } from "@/store/chatStore";
 import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
 import { ChatWindow } from "@/components/chat/ChatWindow";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
+import { ProductsPanel } from "@/components/products/ProductsPanel";
+import { OrdersPanel } from "@/components/orders/OrdersPanel";
 import { ToastProvider } from "@/components/ui/Toast";
 import { MessageSquare, Bot, Zap } from "lucide-react";
 
@@ -31,7 +33,7 @@ export default function Home() {
           ${mobileShowChat ? "hidden sm:flex" : "flex"}
           w-full sm:w-[340px] flex-shrink-0 flex-col h-full
         `}>
-          <ConversationSidebar onSelectConversation={handleSelect} />
+          <ConversationSidebar onSelectConversation={handleSelect} onOpenPanel={() => setMobileShowChat(true)} />
         </div>
 
         {/* Main area */}
@@ -41,6 +43,10 @@ export default function Home() {
         `}>
           {sidebarTab === "settings" ? (
             <SettingsPanel />
+          ) : sidebarTab === "products" ? (
+            <ProductsPanel />
+          ) : sidebarTab === "orders" ? (
+            <OrdersPanel />
           ) : selectedConversationId ? (
             <ChatWindow
               key={selectedConversationId}

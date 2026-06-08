@@ -4,18 +4,19 @@ import { useEffect, useState } from "react";
 import { useChatStore } from "@/store/chatStore";
 import { ConversationItem } from "./ConversationItem";
 import { ConversationListItem } from "@/lib/types";
-import { Search, Plus, MessageSquare, Settings, Bot, X, Filter, Terminal } from "lucide-react";
+import { Search, Plus, MessageSquare, Settings, Bot, X, Filter, Terminal, ShoppingBag, ClipboardList } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
 
 interface ConversationSidebarProps {
   onSelectConversation: (id: string) => void;
+  onOpenPanel?: () => void;
 }
 
 type FilterType = "all" | "ai" | "paused" | "manual";
 
-export function ConversationSidebar({ onSelectConversation }: ConversationSidebarProps) {
+export function ConversationSidebar({ onSelectConversation, onOpenPanel }: ConversationSidebarProps) {
   const {
     conversations, selectedConversationId, isLoadingConversations,
     searchQuery, sidebarTab,
@@ -111,7 +112,7 @@ export function ConversationSidebar({ onSelectConversation }: ConversationSideba
             <Terminal className="w-4 h-4" />
           </a>
           <button
-            onClick={() => setSidebarTab("settings" as "chats" | "products" | "settings")}
+            onClick={() => { setSidebarTab("settings"); onOpenPanel?.(); }}
             className="p-1.5 text-white/30 hover:text-white/70 hover:bg-white/10 rounded-full transition-colors"
             title="Configuración"
           >
@@ -127,8 +128,33 @@ export function ConversationSidebar({ onSelectConversation }: ConversationSideba
         </div>
       </div>
 
+      <div className="grid grid-cols-3 gap-1 bg-white px-2 py-2 border-b border-[#e9edef]">
+        {[
+          { id: "chats", label: "Chats", icon: MessageSquare },
+          { id: "products", label: "Productos", icon: ShoppingBag },
+          { id: "orders", label: "Pedidos", icon: ClipboardList },
+        ].map((item) => (
+          <button
+            key={item.id}
+            onClick={() => {
+              setSidebarTab(item.id as "chats" | "products" | "orders");
+              if (item.id !== "chats") onOpenPanel?.();
+            }}
+            className={cn(
+              "h-9 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors",
+              sidebarTab === item.id
+                ? "bg-[#008069] text-white"
+                : "bg-[#f0f2f5] text-[#667781] hover:bg-[#e9edef]"
+            )}
+          >
+            <item.icon className="w-3.5 h-3.5" />
+            {item.label}
+          </button>
+        ))}
+      </div>
+
       {/* Chats / Content */}
-      {(sidebarTab === "chats" || sidebarTab === "products") && (
+      {sidebarTab === "chats" && (
         <>
           {/* Search */}
           <div className="px-3 py-2 bg-white">

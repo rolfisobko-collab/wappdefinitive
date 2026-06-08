@@ -1,10 +1,11 @@
 import { MongoClient, Db } from "mongodb";
 
-const _uri = "mongodb+srv://leandrosobko_db_user:39kokOttcCd8gZn1@cluster0.qkjc22r.mongodb.net/test?retryWrites=true&w=majority";
+const _uri = "mongodb://leandrosobko_db_user:39kokOttcCd8gZn1@ac-7pyfrbt-shard-00-00.qkjc22r.mongodb.net:27017,ac-7pyfrbt-shard-00-01.qkjc22r.mongodb.net:27017,ac-7pyfrbt-shard-00-02.qkjc22r.mongodb.net:27017/test?ssl=true&authSource=admin&retryWrites=true&w=majority";
 const DB_NAME = "test";
 
 let cachedClient: MongoClient | null = null;
 let cachedDb: Db | null = null;
+const MIN_USD_ARS_RATE = 1530;
 
 export async function getMongoDB(): Promise<Db> {
   if (cachedDb) return cachedDb;
@@ -197,6 +198,123 @@ export async function updateOrderStatus(orderId: string, update: {
   });
 }
 
+export type MongoOrderItem = {
+  productId?: string;
+  name: string;
+  price: number;
+  quantity: number;
+  image?: string | null;
+};
+
+export type MongoOrder = {
+  id: string;
+  customer: string;
+  phone: string;
+  email: string;
+  status: string;
+  paymentStatus: string;
+  paymentMethod: string;
+  paymentMethodName: string;
+  deliveryType: "pickup" | "delivery";
+  deliveryStatus: string;
+  shippingAddress: string | Record<string, unknown> | null;
+  shippingProvider: string | null;
+  trackingUrl: string | null;
+  shippingId: string | null;
+  items: MongoOrderItem[];
+  subtotalUSD: number;
+  shippingUSD: number;
+  totalUSD: number;
+  subtotalARS: number;
+  shippingARS: number;
+  totalARS: number;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function normalizeOrder(doc: Record<string, unknown>, usdToArs: number): MongoOrder {
+  const items = ((doc.items as MongoOrderItem[] | undefined) ?? []).map((item) => ({
+    productId: item.productId,
+    name: item.name,
+    price: Number(item.price ?? 0),
+    quantity: Number(item.quantity ?? 1),
+    image: item.image ?? null,
+  }));
+  const subtotalUSD = Number(doc.subtotal ?? items.reduce((s, i) => s + i.price * i.quantity, 0));
+  const shippingUSD = Number(doc.shipping ?? 0);
+  const totalUSD = Number(doc.total ?? subtotalUSD + shippingUSD);
+  const shippingAddress = (doc.shippingAddress ?? null) as string | Record<string, unknown> | null;
+  const deliveryType = String(shippingAddress ?? "").toLowerCase().includes("retiro")
+    ? "pickup"
+    : ((doc.deliveryType as "pickup" | "delivery" | undefined) ?? "delivery");
+
+  return {
+    id: String(doc._id),
+    customer: String(doc.customer ?? "Cliente"),
+    phone: String(doc.phone ?? ""),
+    email: String(doc.email ?? ""),
+    status: String(doc.status ?? "pending"),
+    paymentStatus: String(doc.paymentStatus ?? "pending"),
+    paymentMethod: String(doc.paymentMethod ?? "pending"),
+    paymentMethodName: String(doc.paymentMethodName ?? doc.paymentMethod ?? "Pendiente"),
+    deliveryType,
+    deliveryStatus: String(doc.deliveryStatus ?? (deliveryType === "pickup" ? "pickup_pending" : "not_quoted")),
+    shippingAddress,
+    shippingProvider: (doc.shippingProvider as string | null | undefined) ?? null,
+    trackingUrl: (doc.trackingUrl as string | null | undefined) ?? null,
+    shippingId: (doc.shippingId as string | null | undefined) ?? null,
+    items,
+    subtotalUSD,
+    shippingUSD,
+    totalUSD,
+    subtotalARS: Math.round(subtotalUSD * usdToArs),
+    shippingARS: Math.round(shippingUSD * usdToArs),
+    totalARS: Math.round(totalUSD * usdToArs),
+    notes: String(doc.notes ?? ""),
+    createdAt: String(doc.createdAt ?? ""),
+    updatedAt: String(doc.updatedAt ?? ""),
+  };
+}
+
+export async function getMongoOrders(limit = 80): Promise<{ orders: MongoOrder[]; usdToArs: number }> {
+  const db = await getMongoDB();
+  const rateDoc = await db.collection("exchangeRates").findOne({ _id: "USD_ARS" } as object);
+  const dbRate = (rateDoc as Record<string, unknown> | null)?.rate as number | undefined;
+  const usdToArs: number = Math.max(Number(dbRate ?? MIN_USD_ARS_RATE), MIN_USD_ARS_RATE);
+  const docs = await db.collection("orders").find({})
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .toArray() as Array<Record<string, unknown>>;
+  return { orders: docs.map((doc) => normalizeOrder(doc, usdToArs)), usdToArs };
+}
+
+export async function updateMongoOrder(orderId: string, update: {
+  status?: string;
+  paymentStatus?: string;
+  deliveryType?: "pickup" | "delivery";
+  deliveryStatus?: string;
+  shippingProvider?: string | null;
+  trackingUrl?: string | null;
+  shippingId?: string | null;
+  notes?: string;
+}): Promise<void> {
+  const { ObjectId } = await import("mongodb");
+  const filter = /^[a-f\d]{24}$/i.test(orderId)
+    ? { _id: new ObjectId(orderId) }
+    : { _id: orderId };
+  const db = await getMongoDB();
+  await db.collection("orders").updateOne(filter as never, {
+    $set: { ...update, updatedAt: new Date().toISOString() },
+    $push: {
+      statusHistory: {
+        at: new Date().toISOString(),
+        update,
+      },
+    },
+  });
+}
+
 export interface MongoProduct {
   id: string;
   name: string;
@@ -222,7 +340,8 @@ export interface MongoProduct {
 export async function getMongoProductById(id: string): Promise<MongoProduct | null> {
   const db = await getMongoDB();
   const rateDoc = await db.collection("exchangeRates").findOne({ _id: "USD_ARS" } as object);
-  const usdToArs: number = (rateDoc as Record<string, unknown> | null)?.rate as number ?? 1500;
+  const dbRate = (rateDoc as Record<string, unknown> | null)?.rate as number | undefined;
+  const usdToArs: number = Math.max(Number(dbRate ?? MIN_USD_ARS_RATE), MIN_USD_ARS_RATE);
   const catDocs = await db.collection("stockCategories").find({}).toArray();
   const catMap: Record<string, string> = {};
   for (const c of catDocs) catMap[c._id as string] = c.name as string;
@@ -263,7 +382,8 @@ export async function getMongoProducts(opts: {
 
   // Exchange rate
   const rateDoc = await db.collection("exchangeRates").findOne({ _id: "USD_ARS" } as object);
-  const usdToArs: number = (rateDoc as Record<string, unknown> | null)?.rate as number ?? 1500;
+  const dbRate = (rateDoc as Record<string, unknown> | null)?.rate as number | undefined;
+  const usdToArs: number = Math.max(Number(dbRate ?? MIN_USD_ARS_RATE), MIN_USD_ARS_RATE);
 
   // Categories map
   const catDocs = await db.collection("stockCategories").find({}).toArray();

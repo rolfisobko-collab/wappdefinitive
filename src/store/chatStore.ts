@@ -11,7 +11,7 @@ interface ChatStore {
   isLoadingConversations: boolean;
   isLoadingMessages: boolean;
   searchQuery: string;
-  sidebarTab: "chats" | "products" | "settings";
+  sidebarTab: "chats" | "products" | "orders" | "settings";
 
   setConversations: (convs: ConversationListItem[]) => void;
   selectConversation: (id: string | null) => void;
@@ -22,7 +22,7 @@ interface ChatStore {
   setLoadingConversations: (loading: boolean) => void;
   setLoadingMessages: (loading: boolean) => void;
   setSearchQuery: (query: string) => void;
-  setSidebarTab: (tab: "chats" | "products" | "settings") => void;
+  setSidebarTab: (tab: "chats" | "products" | "orders" | "settings") => void;
   updateConversation: (id: string, updates: Partial<ConversationListItem>) => void;
   markAsRead: (conversationId: string) => void;
 }
@@ -35,7 +35,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   isLoadingConversations: false,
   isLoadingMessages: false,
   searchQuery: "",
-  sidebarTab: "chats" as "chats" | "products" | "settings",
+  sidebarTab: "chats" as "chats" | "products" | "orders" | "settings",
 
   setConversations: (convs) => set({ conversations: convs }),
 
