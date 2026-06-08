@@ -190,9 +190,9 @@ export default function LogsPage() {
             Esperando eventos... Mandá un mensaje de WhatsApp para ver los logs.
           </div>
         )}
-        {filtered.map((l) => (
+        {filtered.map((l, index) => (
           <div
-            key={l.id}
+            key={`${l.id}-${index}`}
             className={`flex gap-2 items-start py-[2px] px-1 rounded hover:bg-[#161b22] transition-colors ${l.level === "error" ? "bg-red-950/20" : ""}`}
           >
             <span className="text-[#484f58] shrink-0 w-[88px]">{fmtTime(l.ts)}</span>

@@ -1,0 +1,431 @@
+import type { MongoProduct } from "@/lib/mongodb";
+
+export type AltaClassification = {
+  sku: string | null;
+  partType: string | null;
+  brand: string | null;
+  model: string | null;
+  quality: string | null;
+  confidence: number;
+};
+
+export type AltaQualityGroup = {
+  label: string;
+  replacementBrand: string | null;
+  quality: string | null;
+  technology: string | null;
+  variant: string | null;
+  products: MongoProduct[];
+};
+
+export type AltaBotReply =
+  | { mode: "ai" }
+  | { mode: "clarify"; text: string; classification: AltaClassification }
+  | { mode: "not_found"; text: string; classification: AltaClassification }
+  | { mode: "direct"; text: string; product: MongoProduct; classification: AltaClassification }
+  | { mode: "quality_menu"; text: string; groups: AltaQualityGroup[]; classification: AltaClassification };
+
+const BRANDS = [
+  "IPHONE", "SAMSUNG", "MOTOROLA", "XIAOMI", "NOKIA", "TCL", "HUAWEI", "HONOR",
+  "ALCATEL", "LG", "OPPO", "VIVO", "REALME", "ZTE", "ASUS", "INFINIX", "TECNO",
+];
+
+const BRAND_ALIASES: Record<string, string[]> = {
+  IPHONE: ["iphone", "apple"],
+  SAMSUNG: ["samsung", "galaxy"],
+  MOTOROLA: ["motorola", "moto"],
+  XIAOMI: ["xiaomi", "redmi", "poco", "mi"],
+  NOKIA: ["nokia"],
+  TCL: ["tcl"],
+  HUAWEI: ["huawei"],
+  HONOR: ["honor"],
+  ALCATEL: ["alcatel"],
+  LG: ["lg"],
+  OPPO: ["oppo"],
+  VIVO: ["vivo"],
+  REALME: ["realme"],
+  ZTE: ["zte", "blade"],
+  ASUS: ["asus", "zenfone"],
+  INFINIX: ["infinix"],
+  TECNO: ["tecno"],
+};
+
+const PART_ALIASES: Record<string, string[]> = {
+  "PLACA DE CARGA": ["placa de carga", "placa carga", "pin carga", "puerto carga", "conector carga", "dock"],
+  "FLEX DE CARGA": ["flex de carga", "flex carga"],
+  "FLEX MAIN": ["flex main", "main flex"],
+  "POWER FLEX": ["power flex", "flex power", "flex encendido", "boton encendido"],
+  MODULO: ["modulo", "modulos", "m dulo", "m dulos", "pantalla", "display", "lcd", "pantalla completa"],
+  GLASS: ["glass", "vidrio", "tactil", "touch", "oca"],
+  BATERIA: ["bateria", "battery", "pila"],
+  CAMARA: ["camara", "camera", "frontal", "trasera"],
+  "VISOR DE CAMARA": ["visor de camara", "lente camara", "vidrio camara"],
+  TAPA: ["tapa", "tapas", "contratapa", "back cover", "carcasa"],
+  PARLANTE: ["parlante", "altavoz", "speaker", "buzzer", "campanilla"],
+  "PORTA SIM": ["porta sim", "zocalo sim", "bandeja sim", "slot sim"],
+  "SENSOR HUELLA": ["sensor huella", "huella"],
+  FPC: ["fpc"],
+  HERRAMIENTAS: ["herramienta", "separador", "estano", "flux", "pasta", "cautin", "soporte", "pinza"],
+};
+
+const CATEGORY_MATCH: Record<string, string[]> = {
+  "PLACA DE CARGA": ["placa de carga"],
+  "FLEX DE CARGA": ["flex de carga"],
+  "FLEX MAIN": ["main flex"],
+  "POWER FLEX": ["power flex"],
+  MODULO: ["modulo"],
+  GLASS: ["glass"],
+  BATERIA: ["bateria"],
+  CAMARA: ["camara"],
+  "VISOR DE CAMARA": ["visor de camara"],
+  TAPA: ["tapa"],
+  PARLANTE: ["parlante", "speaker", "buzzer"],
+  "PORTA SIM": ["porta sim", "socalo sim"],
+  "SENSOR HUELLA": ["sensor huella"],
+  FPC: ["fpc"],
+  HERRAMIENTAS: ["herramienta", "insumo"],
+};
+
+const QUALITY_ORDER = [
+  "VEZR", "SUNLONG", "JCID", "BEST", "MASTERFIX", "FASTFIX", "FOXCONN", "MECHANIC",
+  "ORIGINAL", "SERVICE PACK", "SOFT OLED", "HARD OLED", "AMOLED", "OLED", "INCELL",
+  "FHD", "HD", "TFT", "AAA", "C/M", "S/M", "TURBO", "JK", "DD", "ESTANDAR",
+];
+
+const QUALITY_ALIASES: Record<string, string[]> = {
+  ORIGINAL: ["original", "genuino", "oem"],
+  "SERVICE PACK": ["service pack", "svc"],
+  VEZR: ["vezr"],
+  BEST: ["best"],
+  MASTERFIX: ["masterfix"],
+  FASTFIX: ["fastfix", "fast fix"],
+  FOXCONN: ["foxconn"],
+  MECHANIC: ["mechanic"],
+  "SOFT OLED": ["soft oled"],
+  "HARD OLED": ["hard oled"],
+  AMOLED: ["amoled"],
+  OLED: ["oled"],
+  INCELL: ["incell"],
+  FHD: ["fhd"],
+  HD: ["hd"],
+  TFT: ["tft"],
+  AAA: ["aaa"],
+  "C/M": ["c/m", "con marco"],
+  "S/M": ["s/m", "sin marco"],
+  TURBO: ["turbo"],
+  SUNLONG: ["sunlong"],
+  JCID: ["jcid"],
+  JK: ["jk"],
+  DD: ["dd"],
+};
+
+const REPLACEMENT_BRANDS = [
+  "VEZR", "SUNLONG", "JCID", "BEST", "MASTERFIX", "FASTFIX", "FOXCONN", "MECHANIC", "JK", "DD",
+];
+const QUALITY_TECH = [
+  "SOFT OLED", "HARD OLED", "AMOLED", "OLED", "INCELL", "FHD", "HD", "TFT",
+];
+const QUALITY_GRADES = ["ORIGINAL", "SERVICE PACK", "AAA", "TURBO"];
+const QUALITY_VARIANTS = ["C/M", "S/M"];
+
+const PRODUCT_WORDS = [
+  ...Object.values(PART_ALIASES).flat(),
+  ...Object.values(BRAND_ALIASES).flat(),
+  "precio", "stock", "tenes", "tienen", "busco", "necesito", "quiero", "repuesto",
+  "repuestos", "modelo", "calidad", "calidades",
+];
+
+const IPHONE_MODELS = [
+  "16 PRO MAX", "16 PRO", "16 PLUS", "16",
+  "15 PRO MAX", "15 PRO", "15 PLUS", "15",
+  "14 PRO MAX", "14 PRO", "14 PLUS", "14",
+  "13 PRO MAX", "13 PRO", "13 MINI", "13",
+  "12 PRO MAX", "12 PRO", "12 MINI", "12",
+  "11 PRO MAX", "11 PRO", "11",
+  "XS MAX", "XS", "XR", "X",
+  "8 PLUS", "8G", "8",
+  "7 PLUS", "7G", "7",
+  "6S PLUS", "6S", "6 PLUS", "6G", "6",
+  "SE 3", "SE 2", "SE",
+];
+
+function norm(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s/+.-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function wordIncludes(text: string, token: string): boolean {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  return new RegExp(`(^|\\s)${escaped}(\\s|$)`, "i").test(text);
+}
+
+function findAlias(text: string, aliases: Record<string, string[]>): string | null {
+  for (const [key, values] of Object.entries(aliases)) {
+    if (values.some((alias) => wordIncludes(text, norm(alias)))) return key;
+  }
+  return null;
+}
+
+function extractSku(raw: string): string | null {
+  const m = raw.match(/\b([A-Z]{2,5}\.?\d{4,6}|\d{3,6})\b/i);
+  return m ? m[1].toUpperCase() : null;
+}
+
+function extractBrand(raw: string): string | null {
+  const text = ` ${norm(raw)} `;
+  const alias = findAlias(text, BRAND_ALIASES);
+  if (alias) return alias;
+  const up = raw.toUpperCase();
+  return BRANDS.find((brand) => up.includes(brand)) ?? null;
+}
+
+function extractModel(raw: string, brand: string | null): string | null {
+  const clean = norm(raw).toUpperCase();
+
+  if (brand === "IPHONE") {
+    for (const model of IPHONE_MODELS) {
+      const re = new RegExp(`\\b${model.replace(/\s+/g, "\\s+")}\\b`);
+      if (re.test(clean)) return model;
+    }
+  }
+
+  if (brand === "SAMSUNG") {
+    const note = clean.match(/\b(NOTE\s*\d{1,2}(?:\s*(?:ULTRA|PLUS|FE|PRO))?|TAB\s*[A-Z]?\s*\d{1,2}(?:\s*(?:PLUS|FE|ULTRA|S))?)\b/);
+    if (note) return note[1].replace(/\s+/g, " ").trim();
+    const model = clean.match(/\b([ASMJFCB]\s*\d{2,3}\s*(?:5G|4G)?[A-Z]?\s*(?:ULTRA|PLUS|FE|LITE|PRO|CORE|\+)?)\b/);
+    if (model) return model[1].replace(/\s+/g, " ").trim();
+  }
+
+  if (brand === "MOTOROLA") {
+    const model = clean.match(/\b(?:MOTO\s+)?((?:EDGE\s*)?\d{1,3}\s*(?:NEO|FUSION|PRO|ULTRA|LITE)?|[GES]\s*\d{1,3}[A-Z]?\s*(?:PLAY|PLUS|POWER|LITE|PRO|ULTRA|EDGE|STYLUS)?)\b/);
+    if (model) return model[1].replace(/\s+/g, " ").trim();
+  }
+
+  if (brand === "XIAOMI") {
+    const model = clean.match(/\b((?:REDMI\s*)?(?:NOTE\s*)?\d{1,2}[A-Z]?(?:\s*(?:PRO|PLUS|ULTRA|C))?|POCO\s*[XMFC]\d{1,2}(?:\s*PRO)?|MI\s*\d{1,2}(?:\s*LITE|\s*PRO)?)\b/);
+    if (model) return model[1].replace(/\s+/g, " ").trim();
+  }
+
+  const generic = clean.match(/\b([A-Z]{0,3}\d{1,3}[A-Z]?(?:\s*(?:PRO MAX|PRO|PLUS|MAX|PLAY|POWER|LITE|ULTRA|NOTE|EDGE|CORE|NEO|4G|5G))?)\b/);
+  if (generic && !/^\d{4}$/.test(generic[1])) return generic[1].replace(/\s+/g, " ").trim();
+  return null;
+}
+
+function detectProductBrand(product: MongoProduct): string | null {
+  return extractBrand(product.name);
+}
+
+function detectProductQuality(product: MongoProduct): string {
+  return detectReplacementMeta(product).label;
+}
+
+function detectReplacementMeta(product: MongoProduct) {
+  const full = `${norm(product.name)} ${norm(product.category)}`;
+  const found = Object.keys(QUALITY_ALIASES).filter((quality) =>
+    QUALITY_ALIASES[quality].some((alias) => wordIncludes(full, norm(alias)))
+  );
+  const replacementBrand = REPLACEMENT_BRANDS.find((quality) => found.includes(quality)) ?? null;
+  const quality = QUALITY_GRADES.find((grade) => found.includes(grade)) ?? null;
+  const technology = QUALITY_TECH.find((tech) => found.includes(tech)) ?? null;
+  const variant = QUALITY_VARIANTS.find((v) => found.includes(v)) ?? null;
+  const label = [replacementBrand, quality, technology, variant].filter(Boolean).join(" ") || "ESTANDAR";
+  return { label, replacementBrand, quality, technology, variant };
+}
+
+function categoryMatches(product: MongoProduct, partType: string): boolean {
+  const category = norm(product.category);
+  const name = norm(product.name);
+  const targets = CATEGORY_MATCH[partType] ?? [partType];
+  return targets.some((target) => category.includes(norm(target))) ||
+    (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(name, norm(alias)));
+}
+
+function modelMatches(product: MongoProduct, model: string): boolean {
+  const productName = product.name.toUpperCase();
+  const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const suffixes = ["MAX", "PLUS", "ULTRA", "MINI", "LITE", "FE", "PRO"];
+  const modelParts = model.toUpperCase().split(/\s+/);
+  const exclusions = suffixes.filter((s) => !modelParts.includes(s));
+  const lookAhead = exclusions.length ? `(?!\\s+(?:${exclusions.join("|")})(?:\\s|$))` : "";
+  return new RegExp(`(^|[\\s/(,-])${escaped}${lookAhead}([\\s/),+-]|$)`).test(productName);
+}
+
+function classifyProduct(product: MongoProduct) {
+  const brand = detectProductBrand(product);
+  return {
+    brand,
+    model: extractModel(product.name, brand),
+    quality: detectProductQuality(product),
+  };
+}
+
+export function classifyAltaQuery(query: string): AltaClassification {
+  const text = norm(query);
+  const sku = extractSku(query);
+  const partType = findAlias(text, PART_ALIASES);
+  const brand = extractBrand(query);
+  const quality = findAlias(text, QUALITY_ALIASES);
+  const model = extractModel(query, brand);
+  const detected = [sku, partType, brand, model, quality].filter(Boolean).length;
+  return { sku, partType, brand, model, quality, confidence: Math.min(detected / 3, 1) };
+}
+
+export function isAltaProductQuery(query: string): boolean {
+  const text = norm(query);
+  return PRODUCT_WORDS.some((word) => text.includes(norm(word))) || Boolean(classifyAltaQuery(query).sku);
+}
+
+export function splitAltaQueries(query: string): string[] {
+  const lines = query
+    .replace(/^[*\-•]\s*/gm, "")
+    .split(/\n|;|\s+\+\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 2);
+  return lines.length > 1 ? lines.slice(0, 4) : [query];
+}
+
+function filterProducts(products: MongoProduct[], cls: AltaClassification): MongoProduct[] {
+  let result = products.filter((p) => p.price > 0);
+
+  if (cls.sku) {
+    const exact = result.filter((p) => String(p.sku ?? "").toUpperCase() === cls.sku);
+    if (exact.length) return exact;
+    result = result.filter((p) => String(p.sku ?? "").toUpperCase().includes(cls.sku as string));
+    if (result.length) return sortProducts(result);
+  }
+
+  if (cls.partType) result = result.filter((p) => categoryMatches(p, cls.partType as string));
+  if (cls.brand) result = result.filter((p) => detectProductBrand(p) === cls.brand || norm(p.name).includes(norm(cls.brand)));
+  if (cls.model) result = result.filter((p) => modelMatches(p, cls.model as string));
+  if (cls.quality) {
+    result = result.filter((p) => detectProductQuality(p) === cls.quality || norm(p.name).includes(norm(cls.quality)));
+  }
+
+  return sortProducts(result);
+}
+
+function sortProducts(products: MongoProduct[]): MongoProduct[] {
+  return [...products].sort((a, b) => {
+    if (a.available !== b.available) return a.available ? -1 : 1;
+    if ((a.stock > 0) !== (b.stock > 0)) return a.stock > 0 ? -1 : 1;
+    return String(a.sku ?? "").localeCompare(String(b.sku ?? ""));
+  });
+}
+
+function groupByQuality(products: MongoProduct[]): AltaQualityGroup[] {
+  const map = new Map<string, { meta: ReturnType<typeof detectReplacementMeta>; products: MongoProduct[] }>();
+  for (const product of products) {
+    const meta = detectReplacementMeta(product);
+    const current = map.get(meta.label) ?? { meta, products: [] };
+    current.products.push(product);
+    map.set(meta.label, current);
+  }
+
+  return Array.from(map.values())
+    .map(({ meta, products }) => ({ ...meta, products: sortProducts(products) }))
+    .sort((a, b) => {
+      const ai = QUALITY_ORDER.findIndex((quality) => a.label.includes(quality));
+      const bi = QUALITY_ORDER.findIndex((quality) => b.label.includes(quality));
+      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    });
+}
+
+function labelForSearch(cls: AltaClassification): string {
+  return [cls.partType, cls.brand, cls.model].filter(Boolean).join(" ") || "producto";
+}
+
+function shortName(product: MongoProduct, max = 54): string {
+  const name = product.name.replace(/\s+/g, " ").trim();
+  return name.length <= max ? name : `${name.slice(0, max - 1).trim()}...`;
+}
+
+function formatUsd(product: MongoProduct): string {
+  const price = product.promoPrice ?? product.price;
+  return `USD ${Number(price || 0).toFixed(2).replace(/\.00$/, "")}`;
+}
+
+export function buildAltaProductCaption(product: MongoProduct): string {
+  const price = product.promoPrice
+    ? `USD ${product.promoPrice} (antes USD ${product.price})`
+    : formatUsd(product);
+  const ars = (product.promoPriceARS ?? product.priceARS).toLocaleString("es-AR");
+  return [
+    `*${product.name}*`,
+    product.sku ? `SKU: ${product.sku}` : null,
+    product.category ? `Categoria: ${product.category}` : null,
+    `Precio: ${price} | ARS ${ars}`,
+    product.available ? `Stock: ${product.stock}` : "Sin stock",
+  ].filter(Boolean).join("\n");
+}
+
+export function buildAltaProductBotReply(products: MongoProduct[], query: string): AltaBotReply {
+  if (!isAltaProductQuery(query)) return { mode: "ai" };
+
+  const cls = classifyAltaQuery(query);
+  if (!cls.partType && !cls.brand && !cls.model && !cls.sku) return { mode: "ai" };
+
+  if (!cls.partType && (cls.brand || cls.model) && !cls.sku) {
+    return {
+      mode: "clarify",
+      classification: cls,
+      text: `Te busco ${labelForSearch(cls)}, pero decime que pieza necesitas: modulo, bateria, placa de carga, tapa, camara o flex.`,
+    };
+  }
+
+  if (cls.partType && !cls.model && !cls.sku && cls.partType !== "HERRAMIENTAS") {
+    return {
+      mode: "clarify",
+      classification: cls,
+      text: `Perfecto, ${cls.partType.toLowerCase()}. Pasame marca y modelo exacto, por ejemplo: "${cls.partType.toLowerCase()} samsung a52".`,
+    };
+  }
+
+  const all = filterProducts(products, cls);
+  const available = all.filter((p) => p.available);
+  const searchLabel = labelForSearch(cls);
+
+  if (!all.length) {
+    return {
+      mode: "not_found",
+      classification: cls,
+      text: `No encontre ${searchLabel} en el catalogo. Si queres, pasame el modelo exacto o el SKU y lo reviso de nuevo.`,
+    };
+  }
+
+  const groups = groupByQuality(all);
+  if (groups.length > 1) {
+    const lines = groups.slice(0, 10).map((group, index) => {
+      const product = group.products[0];
+      const stock = product.available ? `stock ${product.stock}` : "sin stock";
+      return `${index + 1}. ${group.label} - ${formatUsd(product)} - ${stock}`;
+    });
+    return {
+      mode: "quality_menu",
+      classification: cls,
+      groups: groups.slice(0, 10),
+      text: `Tengo estas opciones para ${searchLabel}:\n\n${lines.join("\n")}\n\nElegi marca/calidad y te paso la ficha para agregar al carrito.`,
+    };
+  }
+
+  if (!available.length) {
+    return {
+      mode: "not_found",
+      classification: cls,
+      text: `Encontre ${searchLabel}, pero ahora figura sin stock. Si queres te muestro alternativas cercanas.`,
+    };
+  }
+
+  const firstGroup = groups[0];
+  const product = firstGroup.products.find((p) => p.available) ?? firstGroup.products[0];
+  return {
+    mode: "direct",
+    classification: cls,
+    product,
+    text: `Resultado para ${searchLabel}:\n${shortName(product)}`,
+  };
+}

@@ -8,6 +8,7 @@ import {
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
 import { generateAIResponse, transcribeAudio, filterProductsByRelevance, AIMessage } from "@/lib/ai";
 import { getMongoProducts, getMongoProductById, createOrderInMongo, updateOrderStatus, expandKeywords, MongoProduct } from "@/lib/mongodb";
+import { buildAltaProductBotReply, buildAltaProductCaption, type AltaQualityGroup } from "@/lib/altaProductBot";
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
@@ -18,6 +19,8 @@ type GlobalWithIO = {
     emit: (e: string, d: unknown) => void;
   };
 };
+
+const pendingAltaSelections = new Map<string, AltaQualityGroup[]>();
 
 // ─── Intent detection ───────────────────────────────────────────────────────
 
@@ -328,6 +331,41 @@ export async function POST(req: NextRequest) {
         const buttonId = msg.interactivePayload.id;
         const wa       = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
 
+        // ALTA PRODUCT QUALITY PICK
+        if (buttonId.startsWith("alta_pick_")) {
+          const pickValue = buttonId.slice("alta_pick_".length);
+          const idx = Number(pickValue);
+          const groups = pendingAltaSelections.get(conversation.id) ?? [];
+          const group = Number.isFinite(idx) ? groups[idx] : null;
+          const product = group?.products[0] ?? await getMongoProductById(pickValue);
+
+          if (product) {
+            const caption = buildAltaProductCaption(product);
+            const cardButtons = product.available
+              ? [{ id: `cart_add_${product.id}`, title: "Agregar" }, { id: "cart_view", title: "Ver carrito" }]
+              : [{ id: "catalog_more", title: "Ver mas" }];
+
+            try {
+              await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
+            } catch {
+              await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+            }
+
+            const cardMsg = await createMessage({
+              conversationId: conversation.id,
+              direction: "outbound",
+              sender: "ai",
+              status: "sent",
+              content: caption,
+              metadata: JSON.stringify({ headerImage: product.image ?? null, buttons: cardButtons, isProductSearch: true }),
+            });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
+          } else {
+            await wa.sendTextMessage(contact.phone, "No encontre esa opcion. Escribime de nuevo el producto y te muestro las calidades.");
+          }
+          continue;
+        }
+
         // ADD PRODUCT TO CART
         if (buttonId.startsWith("cart_add_")) {
           const mongoId = buttonId.slice("cart_add_".length);
@@ -599,6 +637,99 @@ export async function POST(req: NextRequest) {
           io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: clearMsg });
           continue;
         }
+      }
+
+      // Alta deterministic product bot. It runs before AI and keeps cart/payment flow intact.
+      try {
+        const { products } = await getMongoProducts({ limit: 5000, onlyAvailable: false });
+        const altaReply = buildAltaProductBotReply(products, textForSearch);
+
+        if (altaReply.mode !== "ai") {
+          pendingAltaSelections.delete(conversation.id);
+
+          if (altaReply.mode === "clarify" || altaReply.mode === "not_found") {
+            const outMsg = await createMessage({
+              conversationId: conversation.id,
+              direction: "outbound",
+              sender: "ai",
+              status: "sent",
+              content: altaReply.text,
+              metadata: JSON.stringify({ isProductSearch: true, altaBot: altaReply.mode }),
+            });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
+            if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+              const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+              await wa.sendTextMessage(contact.phone, altaReply.text);
+            }
+            continue;
+          }
+
+          if (altaReply.mode === "quality_menu") {
+            pendingAltaSelections.set(conversation.id, altaReply.groups);
+            const outMsg = await createMessage({
+              conversationId: conversation.id,
+              direction: "outbound",
+              sender: "ai",
+              status: "sent",
+              content: altaReply.text,
+              metadata: JSON.stringify({ isProductSearch: true, altaBot: "quality_menu" }),
+            });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
+
+            if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+              const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+              await wa.sendInteractiveList(
+                contact.phone,
+                "Elegir calidad",
+                altaReply.text,
+                "Alta Telefonia",
+                "Ver calidades",
+                [{
+                  title: "Calidades disponibles",
+                  rows: altaReply.groups.map((group, index) => {
+                    const product = group.products[0];
+                    return {
+                      id: `alta_pick_${product.id}`,
+                      title: group.label.slice(0, 24),
+                      description: `${product.name} - USD ${product.promoPrice ?? product.price}`.slice(0, 72),
+                    };
+                  }),
+                }]
+              );
+            }
+            continue;
+          }
+
+          if (altaReply.mode === "direct") {
+            const product = altaReply.product;
+            const caption = buildAltaProductCaption(product);
+            const cardButtons = product.available
+              ? [{ id: `cart_add_${product.id}`, title: "Agregar" }, { id: "cart_view", title: "Ver carrito" }]
+              : [{ id: "catalog_more", title: "Ver mas" }];
+
+            if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+              const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+              try {
+                await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
+              } catch {
+                await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+              }
+            }
+
+            const cardMsg = await createMessage({
+              conversationId: conversation.id,
+              direction: "outbound",
+              sender: "ai",
+              status: "sent",
+              content: caption,
+              metadata: JSON.stringify({ headerImage: product.image ?? null, buttons: cardButtons, isProductSearch: true, altaBot: "direct" }),
+            });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
+            continue;
+          }
+        }
+      } catch (e) {
+        console.error("[alta product bot]", e);
       }
 
       const aiConfig = await getAIConfig() as Record<string, unknown>;
