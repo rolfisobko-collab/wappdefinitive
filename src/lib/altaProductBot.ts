@@ -344,22 +344,28 @@ function shortName(product: MongoProduct, max = 54): string {
   return name.length <= max ? name : `${name.slice(0, max - 1).trim()}...`;
 }
 
-function formatUsd(product: MongoProduct): string {
-  const price = product.promoPrice ?? product.price;
-  return `USD ${Number(price || 0).toFixed(2).replace(/\.00$/, "")}`;
+function formatARSValue(value: number): string {
+  return new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatARS(product: MongoProduct): string {
+  return formatARSValue(product.promoPriceARS ?? product.priceARS);
 }
 
 export function buildAltaProductCaption(product: MongoProduct): string {
-  const price = product.promoPrice
-    ? `USD ${product.promoPrice} (antes USD ${product.price})`
-    : formatUsd(product);
-  const ars = (product.promoPriceARS ?? product.priceARS).toLocaleString("es-AR");
+  const price = product.promoPriceARS
+    ? `${formatARSValue(product.promoPriceARS)} (antes ${formatARSValue(product.priceARS)})`
+    : formatARS(product);
   return [
     `*${product.name}*`,
     product.sku ? `SKU: ${product.sku}` : null,
     product.category ? `Categoria: ${product.category}` : null,
-    `Precio: ${price} | ARS ${ars}`,
-    product.available ? `Stock: ${product.stock}` : "Sin stock",
+    `Precio: ${price}`,
+    product.available ? "Disponible" : "Sin stock",
   ].filter(Boolean).join("\n");
 }
 
@@ -401,8 +407,8 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
   if (groups.length > 1) {
     const lines = groups.slice(0, 10).map((group, index) => {
       const product = group.products[0];
-      const stock = product.available ? `stock ${product.stock}` : "sin stock";
-      return `${index + 1}. ${group.label} - ${formatUsd(product)} - ${stock}`;
+      const stock = product.available ? "Disponible" : "Sin stock";
+      return `${index + 1}. ${group.label} - ${formatARS(product)} - ${stock}`;
     });
     return {
       mode: "quality_menu",

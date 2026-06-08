@@ -22,13 +22,8 @@ interface CartPanelProps {
 function fARS(n: number) {
   return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
 }
-function fUSD(n: number) {
-  return `USD ${n.toFixed(0)}`;
-}
-
 export function CartPanel({ cart, conversationId, onCartChange, onSendCart, onClose }: CartPanelProps) {
   const items = cart?.items ?? [];
-  const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
   const totalARS = items.reduce((s, i) => s + i.unitPriceARS * i.quantity, 0);
 
   const [search, setSearch]       = useState("");
@@ -121,9 +116,7 @@ export function CartPanel({ cart, conversationId, onCartChange, onSendCart, onCl
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold text-[#111b21] line-clamp-2 leading-snug">{item.name}</p>
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="text-[11px] font-bold text-[#008069]">{fUSD(item.unitPriceUSD)}</span>
-                        <span className="text-[10px] text-[#aebac1]">·</span>
-                        <span className="text-[10px] text-[#667781]">{fARS(item.unitPriceARS)}</span>
+                        <span className="text-[11px] font-bold text-[#008069]">{fARS(item.unitPriceARS)}</span>
                         <span className="text-[10px] text-[#aebac1]">× {item.quantity}</span>
                       </div>
                     </div>
@@ -143,8 +136,7 @@ export function CartPanel({ cart, conversationId, onCartChange, onSendCart, onCl
                 <div className="flex justify-between items-center">
                   <span className="text-xs font-bold text-[#111b21]">Total</span>
                   <div className="text-right">
-                    <p className="text-sm font-bold text-[#111b21]">{fUSD(totalUSD)}</p>
-                    <p className="text-xs text-[#667781]">{fARS(totalARS)}</p>
+                    <p className="text-sm font-bold text-[#111b21]">{fARS(totalARS)}</p>
                   </div>
                 </div>
               </div>
@@ -204,7 +196,7 @@ export function CartPanel({ cart, conversationId, onCartChange, onSendCart, onCl
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-[11px] font-semibold text-[#111b21] line-clamp-1">{p.name}</p>
-                      <p className="text-[10px] text-[#667781]">{fUSD(p.promoPrice ?? p.price)} · {fARS(p.promoPriceARS ?? p.priceARS)}</p>
+                      <p className="text-[10px] text-[#667781]">{fARS(p.promoPriceARS ?? p.priceARS)}</p>
                     </div>
                     <button
                       onClick={() => addItem(p)}

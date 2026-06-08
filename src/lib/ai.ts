@@ -31,7 +31,7 @@ export async function filterProductsByRelevance(
   const groq = new Groq({ apiKey: groqApiKey || GROQ_API_KEY });
 
   const list = products
-    .map((p, i) => `${i + 1}. [${p.sku ?? "s/n"}] ${p.name} — USD ${p.price}`)
+    .map((p, i) => `${i + 1}. [${p.sku ?? "s/n"}] ${p.name} — ARS ${p.priceARS.toLocaleString("es-AR")}`)
     .join("\n");
 
   const prompt = `El cliente busca: "${userQuery}"
@@ -69,7 +69,7 @@ Reglas para decidir cuáles incluir:
 
 async function buildProductCatalogContext(): Promise<string> {
   try {
-    const { categories, usdToArs } = await getMongoProducts({ limit: 1 });
+    const { categories } = await getMongoProducts({ limit: 1 });
     const db = await getMongoDB();
 
     const counts = await db.collection("stock").aggregate([
@@ -82,10 +82,10 @@ async function buildProductCatalogContext(): Promise<string> {
 
     const catLines = categories
       .filter((c) => catMap[c.id]?.total > 0)
-      .map((c) => `  • ${c.name}: ${catMap[c.id].total} productos (${catMap[c.id].conStock} con stock)`)
+      .map((c) => `  • ${c.name}: ${catMap[c.id].total} productos`)
       .join("\n");
 
-    return `\n\n--- CATÁLOGO ALTA TELEFONÍA (1 USD = ARS ${usdToArs}) ---
+    return `\n\n--- CATÁLOGO ALTA TELEFONÍA (precios al cliente en pesos argentinos) ---
 Tenés acceso a más de 3.500 productos en estas categorías:
 ${catLines}
 
@@ -129,16 +129,15 @@ export async function generateAIResponse(
   if (includeProducts) {
     if (relevantProducts && relevantProducts.length > 0) {
       // Use pre-searched products (faster, more relevant)
-      const { usdToArs } = relevantProducts[0] ? { usdToArs: relevantProducts[0].usdToArs } : { usdToArs: 1500 };
       const lines = relevantProducts.map((p: MongoProduct) => {
         const stockLabel = p.available ? "DISPONIBLE" : "SIN STOCK";
-        const price = p.promoPrice
-          ? `USD ${p.promoPrice} (oferta) / ARS ${p.promoPriceARS?.toLocaleString("es-AR")}`
-          : `USD ${p.price} / ARS ${p.priceARS.toLocaleString("es-AR")}`;
+        const price = p.promoPriceARS
+          ? `ARS ${p.promoPriceARS.toLocaleString("es-AR")} (oferta, antes ARS ${p.priceARS.toLocaleString("es-AR")})`
+          : `ARS ${p.priceARS.toLocaleString("es-AR")}`;
         const cat = p.category ? ` [${p.category}]` : "";
         return `- ${p.name}${cat} | ${price} | ${stockLabel}`;
       });
-      prompt += `\n\n--- PRODUCTOS ENCONTRADOS (1 USD = ARS ${usdToArs}) ---\n${lines.join("\n")}\n--- FIN ---\n\n⚠️ REGLAS ESTRICTAS PARA ESTE MENSAJE:\n1. Presentá SOLO los productos de la lista de arriba — no inventes ni agregues otros.\n2. Si hay productos disponibles: mostrá nombre, precio USD y ARS, y estado de stock.\n3. Si hay productos sin stock: avisalo claramente igual.\n4. Sé breve: máx 3-4 líneas por producto.\n5. No menciones temas anteriores de la conversación.\n6. Si el cliente escribió mal el modelo (ej: "13 pro maxx") igual mostrá lo que encontraste más cercano.\n7. Invitá a agregar al carrito con el botón que aparece debajo.`;
+      prompt += `\n\n--- PRODUCTOS ENCONTRADOS (precios al cliente en pesos argentinos) ---\n${lines.join("\n")}\n--- FIN ---\n\n⚠️ REGLAS ESTRICTAS PARA ESTE MENSAJE:\n1. Presentá SOLO los productos de la lista de arriba — no inventes ni agregues otros.\n2. Si hay productos disponibles: mostrá nombre, precio en pesos argentinos y estado de stock.\n3. Si hay productos sin stock: avisalo claramente igual.\n4. No muestres precios en dólares al cliente.\n5. No menciones cantidades exactas de stock; solo Disponible o Sin stock.\n6. Sé breve: máx 3-4 líneas por producto.\n7. No menciones temas anteriores de la conversación.\n8. Si el cliente escribió mal el modelo (ej: "13 pro maxx") igual mostrá lo que encontraste más cercano.\n9. Invitá a agregar al carrito con el botón que aparece debajo.`;
     } else {
       // No specific products found — use general catalog
       prompt += await buildProductCatalogContext();

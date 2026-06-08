@@ -221,13 +221,13 @@ function detectCategoryHint(keywords: string[]): string | null {
 // ─── Cart message builder ────────────────────────────────────────────────────
 
 function buildCartText(items: Array<{ name: string; quantity: number; unitPriceUSD: number; unitPriceARS: number }>) {
+  const fARS = (n: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
   const lines = items.map(
     (i) =>
-      `• ${i.name} × ${i.quantity}\n  💵 USD ${(i.unitPriceUSD * i.quantity).toFixed(0)} | ARS ${(i.unitPriceARS * i.quantity).toLocaleString("es-AR")}`
+      `• ${i.name} × ${i.quantity}\n  💵 ${fARS(i.unitPriceARS * i.quantity)}`
   );
-  const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
   const totalARS = items.reduce((s, i) => s + i.unitPriceARS * i.quantity, 0);
-  return `🛒 *Tu carrito:*\n\n${lines.join("\n")}\n\n*Total: USD ${totalUSD.toFixed(0)} | ARS ${totalARS.toLocaleString("es-AR")}*`;
+  return `🛒 *Tu carrito:*\n\n${lines.join("\n")}\n\n*Total: ${fARS(totalARS)}*`;
 }
 
 // ─── Webhook GET (verification) ─────────────────────────────────────────────
@@ -380,7 +380,7 @@ export async function POST(req: NextRequest) {
                 unitPriceARS:   product.promoPriceARS ?? product.priceARS,
               });
               io?.to(`conversation:${conversation.id}`).emit("cart-updated", { conversationId: conversation.id, cart: updatedCart });
-              const confirmText = `✅ *${product.name}* agregado al carrito!\n💵 USD ${product.promoPrice ?? product.price} | ARS ${(product.promoPriceARS ?? product.priceARS).toLocaleString("es-AR")}`;
+              const confirmText = `✅ *${product.name}* agregado al carrito!\n💵 ${new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(product.promoPriceARS ?? product.priceARS)}`;
               await wa.sendButtons(contact.phone, confirmText, [
                 { id: "cart_view",    title: "🛒 Ver carrito" },
                 { id: "catalog_more", title: "🔍 Seguir viendo" },
@@ -691,7 +691,7 @@ export async function POST(req: NextRequest) {
                     return {
                       id: `alta_pick_${product.id}`,
                       title: group.label.slice(0, 24),
-                      description: `${product.name} - USD ${product.promoPrice ?? product.price}`.slice(0, 72),
+                      description: `${product.name} - ${new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(product.promoPriceARS ?? product.priceARS)}`.slice(0, 72),
                     };
                   }),
                 }]
@@ -864,7 +864,7 @@ export async function POST(req: NextRequest) {
                 `📦 *${product.name}*\n` +
                 (product.sku ? `🔢 SKU: ${product.sku}\n` : "") +
                 (product.category ? `🏷️ ${product.category}\n` : "") +
-                `💵 USD ${product.promoPrice ?? product.price}${product.promoPrice ? ` ~~${product.price}~~` : ""} | ARS ${(product.promoPriceARS ?? product.priceARS).toLocaleString("es-AR")}\n` +
+                `💵 ${new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(product.promoPriceARS ?? product.priceARS)}${product.promoPriceARS ? ` (antes ${new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(product.priceARS)})` : ""}\n` +
                 (product.available ? `✅ Disponible` : `❌ Sin stock`);
 
               const cardButtons = product.available

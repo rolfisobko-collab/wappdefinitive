@@ -13,7 +13,6 @@ import { getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
 import { format, isToday, isYesterday } from "date-fns";
 
-function fUSD(n: number) { return `USD ${n.toFixed(0)}`; }
 function fARS(n: number) { return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n); }
 import { es } from "date-fns/locale";
 import { ShoppingCart } from "lucide-react";
@@ -149,10 +148,9 @@ export function ChatWindow({ conversationId, onBack }: ChatWindowProps) {
   const handleSendCart = async () => {
     const items = (cart as { items?: CartMongoItem[] } | null)?.items ?? [];
     if (!items.length) return;
-    const lines = items.map((i) => `• ${i.name} × ${i.quantity} = ${fUSD(i.unitPriceUSD * i.quantity)} | ${fARS(i.unitPriceARS * i.quantity)}`).join("\n");
-    const totalUSD = items.reduce((s, i) => s + i.unitPriceUSD * i.quantity, 0);
+    const lines = items.map((i) => `• ${i.name} × ${i.quantity} = ${fARS(i.unitPriceARS * i.quantity)}`).join("\n");
     const totalARS = items.reduce((s, i) => s + i.unitPriceARS * i.quantity, 0);
-    await handleSend(`🛒 *Tu carrito:*\n\n${lines}\n\n*Total: ${fUSD(totalUSD)} | ${fARS(totalARS)}*\n\n¿Confirmás el pedido?`);
+    await handleSend(`🛒 *Tu carrito:*\n\n${lines}\n\n*Total: ${fARS(totalARS)}*\n\n¿Confirmás el pedido?`);
     toast("Carrito enviado al cliente ✓", "success");
   };
 

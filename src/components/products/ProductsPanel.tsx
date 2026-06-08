@@ -17,9 +17,6 @@ interface ProductsData {
 function formatARS(n: number) {
   return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
 }
-function formatUSD(n: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
-}
 
 export function ProductsPanel() {
   const { toast } = useToast();
@@ -55,7 +52,6 @@ export function ProductsPanel() {
 
   const products = data?.products ?? [];
   const categories = data?.categories ?? [];
-  const usdToArs = data?.usdToArs ?? 1500;
   const available = products.filter((p) => p.available).length;
 
   return (
@@ -97,7 +93,7 @@ export function ProductsPanel() {
             </div>
             <div className="flex items-center gap-1.5 bg-amber-50 rounded-lg px-3 py-1.5 border border-amber-100">
               <Zap className="w-3.5 h-3.5 text-amber-500" />
-              <span className="text-amber-700 font-semibold">1 USD = {formatARS(usdToArs)}</span>
+              <span className="text-amber-700 font-semibold">Precios en pesos</span>
             </div>
           </div>
         )}
@@ -204,7 +200,7 @@ function ProductCard({ product, expanded, onToggle }: {
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const hasPromo = !!product.promoPrice && product.promoPrice < product.price;
+  const hasPromo = !!product.promoPriceARS && product.promoPriceARS < product.priceARS;
 
   return (
     <div
@@ -248,7 +244,7 @@ function ProductCard({ product, expanded, onToggle }: {
           {product.available ? (
             <span className="flex items-center gap-1 bg-white/90 text-[#008069] text-[10px] font-bold px-2 py-0.5 rounded-full border border-green-200">
               <CheckCircle className="w-2.5 h-2.5" />
-              Stock: {product.stock}
+              Disponible
             </span>
           ) : (
             <span className="flex items-center gap-1 bg-white/90 text-red-500 text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-100">
@@ -280,16 +276,15 @@ function ProductCard({ product, expanded, onToggle }: {
             <>
               <div className="flex items-baseline gap-2">
                 <span className="text-base font-bold text-[#008069]">
-                  {formatUSD(product.promoPrice!)}
+                  {formatARS(product.promoPriceARS!)}
                 </span>
-                <span className="text-xs text-[#aebac1] line-through">{formatUSD(product.price)}</span>
+                <span className="text-xs text-[#aebac1] line-through">{formatARS(product.priceARS)}</span>
               </div>
-              <span className="text-xs text-[#667781]">{formatARS(product.promoPriceARS!)} ARS</span>
+              <span className="text-xs text-[#667781]">{formatARS(product.promoPriceARS!)}</span>
             </>
           ) : (
             <>
-              <span className="text-base font-bold text-[#111b21]">{formatUSD(product.price)}</span>
-              <span className="text-xs text-[#667781]">{formatARS(product.priceARS)} ARS</span>
+              <span className="text-base font-bold text-[#111b21]">{formatARS(product.priceARS)}</span>
             </>
           )}
         </div>
