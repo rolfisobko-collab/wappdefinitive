@@ -59,7 +59,7 @@ const PART_ALIASES: Record<string, string[]> = {
   "FLEX MAIN": ["flex main", "main flex"],
   "POWER FLEX": ["power flex", "flex power", "flex encendido", "boton encendido"],
   MODULO: ["modulo", "modulos", "m dulo", "m dulos", "pantalla", "display", "lcd", "pantalla completa"],
-  GLASS: ["glass", "vidrio", "tactil", "touch", "oca"],
+  GLASS: ["glass", "glas", "vidrio", "vidirio", "tactil", "touch", "oca"],
   BATERIA: ["bateria", "battery", "pila"],
   CAMARA: ["camara", "camera", "frontal", "trasera"],
   "VISOR DE CAMARA": ["visor de camara", "lente camara", "vidrio camara"],
@@ -68,6 +68,8 @@ const PART_ALIASES: Record<string, string[]> = {
   "PORTA SIM": ["porta sim", "zocalo sim", "bandeja sim", "slot sim"],
   "SENSOR HUELLA": ["sensor huella", "huella"],
   FPC: ["fpc"],
+  CHASIS: ["chasis", "marco completo", "frame"],
+  ACCESORIO: ["accesorio", "accesorios", "templado", "vidrio templado", "hidrogel", "lamina", "protector"],
   CARGADOR: ["cargador", "cargadores", "charger", "carga rapida", "carga rápida", "fuente", "adaptador"],
   MEMORIA: ["memoria", "memorias", "memoria sd", "memorias sd", "micro sd", "microsd", "tarjeta sd", "pendrive"],
   CELULAR: ["celular", "celulares", "telefono", "telefonos", "smartphone", "equipo", "equipos"],
@@ -75,7 +77,10 @@ const PART_ALIASES: Record<string, string[]> = {
     "herramienta", "herramientas", "insumo", "insumos", "separador", "estano", "estaño",
     "flux", "pasta", "pasta termica", "pasta térmica", "termica", "térmica", "precalentadora",
     "precalentadoras", "cautin", "cautín", "soporte", "pinza", "pinzas", "destornillador",
-    "destornilladores", "multicargador",
+    "destornilladores", "multicargador", "passta", "estacion", "estacion de soldado",
+    "estacion de soldadura", "soldado", "soldador", "soldadura", "calor", "aifen", "aife",
+    "qianli", "relife", "mechanic", "amaoe", "luowei", "ycs", "amtech", "hilo", "jumper",
+    "malla", "desoldante", "wick", "trinocular", "microscopio", "extractor de humo",
   ],
 };
 
@@ -94,14 +99,16 @@ const CATEGORY_MATCH: Record<string, string[]> = {
   "PORTA SIM": ["porta sim", "socalo sim"],
   "SENSOR HUELLA": ["sensor huella"],
   FPC: ["fpc"],
+  CHASIS: ["chasis"],
+  ACCESORIO: ["accesorio", "glass", "tactil"],
   CARGADOR: ["cargador", "accesorio", "herramienta"],
   MEMORIA: ["memoria", "accesorio"],
   CELULAR: ["celular"],
   HERRAMIENTAS: ["herramienta", "insumo"],
 };
 
-const PRODUCT_MENU_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "CELULAR"]);
-const GENERIC_ACCESSORY_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA"]);
+const PRODUCT_MENU_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "CELULAR", "ACCESORIO"]);
+const GENERIC_ACCESSORY_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "ACCESORIO"]);
 
 const QUALITY_ORDER = [
   "VEZR", "SUNLONG", "JCID", "BEST", "MASTERFIX", "FASTFIX", "FOXCONN", "MECHANIC",
@@ -189,7 +196,7 @@ function findAlias(text: string, aliases: Record<string, string[]>): string | nu
 }
 
 function extractSku(raw: string): string | null {
-  const m = raw.match(/\b([A-Z]{2,5}\.?\d{4,6}|\d{3,6})\b/i);
+  const m = raw.match(/(?:c[oó]d(?:igo)?\.?\s*#?\s*)?\b([A-Z]{1,6}\.?\d{2,6}|\d{3,6})\b/i);
   return m ? m[1].toUpperCase() : null;
 }
 
@@ -338,6 +345,47 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
   return sortProducts(result);
 }
 
+const QUERY_SYNONYMS: Record<string, string[]> = {
+  glas: ["glass"],
+  vidirio: ["vidrio", "glass", "oca"],
+  passta: ["pasta"],
+  estano: ["estaño"],
+  soldado: ["soldador", "soldadura"],
+  aife: ["aifen"],
+  hilo: ["jumper", "estaño"],
+  malla: ["desoldante", "wick"],
+};
+
+function expandedQueryTokens(query: string): string[] {
+  const tokens = norm(query)
+    .split(/\s+/)
+    .filter((token) => token.length > 2 || /^\d+$/.test(token));
+  const expanded = new Set<string>();
+  for (const token of tokens) {
+    expanded.add(token);
+    for (const synonym of QUERY_SYNONYMS[token] ?? []) expanded.add(norm(synonym));
+  }
+  return Array.from(expanded);
+}
+
+function looseProductFallback(products: MongoProduct[], query: string, cls: AltaClassification): MongoProduct[] {
+  const tokens = expandedQueryTokens(query).filter((token) => !["cod", "codigo", "para"].includes(token));
+  if (!tokens.length) return [];
+
+  return sortProducts(products.filter((product) => {
+    if (product.price <= 0) return false;
+    const haystack = `${norm(product.name)} ${norm(product.category)} ${norm(product.sku)}`;
+    let score = 0;
+    for (const token of tokens) {
+      if (haystack.includes(token)) score += /^\d+$/.test(token) ? 3 : 1;
+    }
+    if (cls.partType && categoryMatches(product, cls.partType)) score += 2;
+    if (cls.brand && (detectProductBrand(product) === cls.brand || haystack.includes(norm(cls.brand)))) score += 2;
+    if (cls.model && modelMatches(product, cls.model)) score += 2;
+    return score >= Math.min(3, Math.max(2, tokens.length - 1));
+  }));
+}
+
 function sortProducts(products: MongoProduct[]): MongoProduct[] {
   return [...products].sort((a, b) => {
     if (a.available !== b.available) return a.available ? -1 : 1;
@@ -431,7 +479,8 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
     };
   }
 
-  const all = filterProducts(products, cls);
+  let all = filterProducts(products, cls);
+  if (!all.length) all = looseProductFallback(products, query, cls);
   const available = all.filter((p) => p.available);
   const searchLabel = labelForSearch(cls);
 

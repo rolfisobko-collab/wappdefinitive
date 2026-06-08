@@ -82,9 +82,22 @@ const SYNONYMS: Record<string, string[]> = {
   insumo:      ["insumos", "herramienta", "herramientas"],
   insumos:     ["insumo", "herramienta", "herramientas"],
   pasta:       ["pasta termica", "termica"],
+  passta:      ["pasta"],
+  estano:      ["estaño"],
+  estaño:      ["estano"],
   termica:     ["pasta", "pasta termica"],
   precalentadora: ["precalentadoras"],
   precalentadoras: ["precalentadora"],
+  estacion:    ["estacion de soldado", "estacion de soldadura"],
+  soldado:     ["soldador", "soldadura"],
+  soldador:    ["soldado", "soldadura"],
+  aife:        ["aifen"],
+  hilo:        ["jumper", "estaño en hilo"],
+  malla:       ["desoldante", "wick"],
+  glas:        ["glass"],
+  vidirio:     ["vidrio", "glass", "oca"],
+  templado:    ["vidrio templado"],
+  chasis:      ["frame"],
   // Display / pantalla (SIN módulo — son distintos en esta BD)
   display:     ["pantalla", "lcd"],
   pantalla:    ["display", "lcd"],
@@ -410,9 +423,17 @@ export async function getMongoProducts(opts: {
 
     const searchQuery = rawKeywords.join(" ");
     const lim = opts.limit ?? 10;
+    const skuMatch = searchQuery.match(/(?:c[oó]d(?:igo)?\.?\s*#?\s*)?\b(\d{3,6})\b/i);
+
+    if (skuMatch) {
+      raw = await db.collection("stock")
+        .find({ ...baseFilter, sku: Number(skuMatch[1]) })
+        .limit(lim)
+        .toArray();
+    }
 
     // 1. Atlas Search — fuzzy, analyzer español, ordenado por relevancia
-    try {
+    if (!raw?.length) try {
       const atlasResults = await db.collection("stock").aggregate([
         {
           $search: {
