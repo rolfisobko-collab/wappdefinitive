@@ -28,6 +28,7 @@ export type AltaBotReply =
 const BRANDS = [
   "IPHONE", "SAMSUNG", "MOTOROLA", "XIAOMI", "NOKIA", "TCL", "HUAWEI", "HONOR",
   "ALCATEL", "LG", "OPPO", "VIVO", "REALME", "ZTE", "ASUS", "INFINIX", "TECNO",
+  "NUBIA", "ITEL",
 ];
 
 const BRAND_ALIASES: Record<string, string[]> = {
@@ -48,6 +49,8 @@ const BRAND_ALIASES: Record<string, string[]> = {
   ASUS: ["asus", "zenfone"],
   INFINIX: ["infinix"],
   TECNO: ["tecno"],
+  NUBIA: ["nubia"],
+  ITEL: ["itel"],
 };
 
 const PART_ALIASES: Record<string, string[]> = {
@@ -65,7 +68,15 @@ const PART_ALIASES: Record<string, string[]> = {
   "PORTA SIM": ["porta sim", "zocalo sim", "bandeja sim", "slot sim"],
   "SENSOR HUELLA": ["sensor huella", "huella"],
   FPC: ["fpc"],
-  HERRAMIENTAS: ["herramienta", "separador", "estano", "flux", "pasta", "cautin", "soporte", "pinza"],
+  CARGADOR: ["cargador", "cargadores", "charger", "carga rapida", "carga rápida", "fuente", "adaptador"],
+  MEMORIA: ["memoria", "memorias", "memoria sd", "memorias sd", "micro sd", "microsd", "tarjeta sd", "pendrive"],
+  CELULAR: ["celular", "celulares", "telefono", "telefonos", "smartphone", "equipo", "equipos"],
+  HERRAMIENTAS: [
+    "herramienta", "herramientas", "insumo", "insumos", "separador", "estano", "estaño",
+    "flux", "pasta", "pasta termica", "pasta térmica", "termica", "térmica", "precalentadora",
+    "precalentadoras", "cautin", "cautín", "soporte", "pinza", "pinzas", "destornillador",
+    "destornilladores", "multicargador",
+  ],
 };
 
 const CATEGORY_MATCH: Record<string, string[]> = {
@@ -83,8 +94,14 @@ const CATEGORY_MATCH: Record<string, string[]> = {
   "PORTA SIM": ["porta sim", "socalo sim"],
   "SENSOR HUELLA": ["sensor huella"],
   FPC: ["fpc"],
+  CARGADOR: ["cargador", "accesorio", "herramienta"],
+  MEMORIA: ["memoria", "accesorio"],
+  CELULAR: ["celular"],
   HERRAMIENTAS: ["herramienta", "insumo"],
 };
+
+const PRODUCT_MENU_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "CELULAR"]);
+const GENERIC_ACCESSORY_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA"]);
 
 const QUALITY_ORDER = [
   "VEZR", "SUNLONG", "JCID", "BEST", "MASTERFIX", "FASTFIX", "FOXCONN", "MECHANIC",
@@ -132,7 +149,7 @@ const PRODUCT_WORDS = [
   ...Object.values(PART_ALIASES).flat(),
   ...Object.values(BRAND_ALIASES).flat(),
   "precio", "stock", "tenes", "tienen", "busco", "necesito", "quiero", "repuesto",
-  "repuestos", "modelo", "calidad", "calidades",
+  "repuestos", "modelo", "calidad", "calidades", "unidad", "unidades",
 ];
 
 const IPHONE_MODELS = [
@@ -208,6 +225,11 @@ function extractModel(raw: string, brand: string | null): string | null {
 
   if (brand === "XIAOMI") {
     const model = clean.match(/\b((?:REDMI\s*)?(?:NOTE\s*)?\d{1,2}[A-Z]?(?:\s*(?:PRO|PLUS|ULTRA|C))?|POCO\s*[XMFC]\d{1,2}(?:\s*PRO)?|MI\s*\d{1,2}(?:\s*LITE|\s*PRO)?)\b/);
+    if (model) return model[1].replace(/\s+/g, " ").trim();
+  }
+
+  if (brand === "NUBIA") {
+    const model = clean.match(/\b((?:NEO\s*)?\d{1,2}(?:\s*(?:PRO|PLUS|MAX|5G|4G))?|RED\s*MAGIC\s*\d{1,2}(?:\s*PRO)?)\b/);
     if (model) return model[1].replace(/\s+/g, " ").trim();
   }
 
@@ -300,10 +322,17 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
   }
 
   if (cls.partType) result = result.filter((p) => categoryMatches(p, cls.partType as string));
-  if (cls.brand) result = result.filter((p) => detectProductBrand(p) === cls.brand || norm(p.name).includes(norm(cls.brand)));
-  if (cls.model) result = result.filter((p) => modelMatches(p, cls.model as string));
+  if (cls.brand) {
+    const withBrand = result.filter((p) => detectProductBrand(p) === cls.brand || norm(p.name).includes(norm(cls.brand)));
+    if (withBrand.length > 0 || !cls.partType || !GENERIC_ACCESSORY_PARTS.has(cls.partType)) result = withBrand;
+  }
+  if (cls.model) {
+    const withModel = result.filter((p) => modelMatches(p, cls.model as string));
+    if (withModel.length > 0 || !cls.partType || !GENERIC_ACCESSORY_PARTS.has(cls.partType)) result = withModel;
+  }
   if (cls.quality) {
-    result = result.filter((p) => detectProductQuality(p) === cls.quality || norm(p.name).includes(norm(cls.quality)));
+    const withQuality = result.filter((p) => detectProductQuality(p) === cls.quality || norm(p.name).includes(norm(cls.quality)));
+    if (withQuality.length > 0) result = withQuality;
   }
 
   return sortProducts(result);
@@ -333,6 +362,17 @@ function groupByQuality(products: MongoProduct[]): AltaQualityGroup[] {
       const bi = QUALITY_ORDER.findIndex((quality) => b.label.includes(quality));
       return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
     });
+}
+
+function groupByProduct(products: MongoProduct[]): AltaQualityGroup[] {
+  return sortProducts(products).slice(0, 10).map((product) => ({
+    label: shortName(product, 38),
+    replacementBrand: null,
+    quality: null,
+    technology: null,
+    variant: null,
+    products: [product],
+  }));
 }
 
 function labelForSearch(cls: AltaClassification): string {
@@ -383,7 +423,7 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
     };
   }
 
-  if (cls.partType && !cls.model && !cls.sku && cls.partType !== "HERRAMIENTAS") {
+  if (cls.partType && !cls.model && !cls.sku && !PRODUCT_MENU_PARTS.has(cls.partType)) {
     return {
       mode: "clarify",
       classification: cls,
@@ -403,7 +443,9 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
     };
   }
 
-  const groups = groupByQuality(all);
+  const groups = cls.partType && PRODUCT_MENU_PARTS.has(cls.partType)
+    ? groupByProduct(all)
+    : groupByQuality(all);
   if (groups.length > 1) {
     const lines = groups.slice(0, 10).map((group, index) => {
       const product = group.products[0];

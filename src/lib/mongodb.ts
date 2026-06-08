@@ -52,8 +52,13 @@ const SYNONYMS: Record<string, string[]> = {
   fpc:         ["flex", "ribbon"],
   // Cargadores / conectores
   cargador:    ["charger", "pin carga", "dock"],
+  cargadores:  ["cargador", "charger"],
   charger:     ["cargador", "pin carga"],
   conector:    ["puerto", "pin", "dock", "jack"],
+  memoria:     ["memorias", "sd", "micro sd", "microsd", "tarjeta sd"],
+  memorias:    ["memoria", "sd", "micro sd", "microsd", "tarjeta sd"],
+  microsd:     ["micro sd", "memoria", "memorias", "sd"],
+  sd:          ["memoria", "memorias", "micro sd", "microsd", "tarjeta sd"],
   // Audio
   auricular:   ["earpiece", "parlante", "altavoz", "bocina"],
   parlante:    ["auricular", "earpiece", "bocina"],
@@ -71,6 +76,14 @@ const SYNONYMS: Record<string, string[]> = {
   volumen:     ["volume"],
   // Vibrador
   vibrador:    ["vibration", "motor vibracion"],
+  herramienta: ["herramientas", "insumo", "insumos"],
+  herramientas:["herramienta", "insumo", "insumos"],
+  insumo:      ["insumos", "herramienta", "herramientas"],
+  insumos:     ["insumo", "herramienta", "herramientas"],
+  pasta:       ["pasta termica", "termica"],
+  termica:     ["pasta", "pasta termica"],
+  precalentadora: ["precalentadoras"],
+  precalentadoras: ["precalentadora"],
   // Display / pantalla (SIN módulo — son distintos en esta BD)
   display:     ["pantalla", "lcd"],
   pantalla:    ["display", "lcd"],

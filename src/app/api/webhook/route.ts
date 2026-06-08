@@ -71,11 +71,11 @@ function detectIntent(text: string): "cart_view" | "cart_confirm" | "cart_clear"
 const PRODUCT_INTENT_RE = new RegExp(
   [
     // Brands
-    "\\b(iphone|samsung|xiaomi|motorola|oppo|realme|nokia|huawei|lg|sony|apple|poco|redmi|tcl|alcatel)\\b",
+    "\\b(iphone|samsung|xiaomi|motorola|oppo|realme|nokia|huawei|lg|sony|apple|poco|redmi|tcl|alcatel|nubia|itel|infinix|tecno)\\b",
     // Part types (accent-stripped)
-    "\\b(pantalla|modulo|modulos|bateria|baterias|camara|camaras|flex|placa|placas|repuesto|repuestos|cargador|cable|funda|vidrio|tactil|auricular|parlante|bocina|microfono|boton|altavoz|tapa|carcasa|marco|lente|sensor|chip|conector|puerto|lcd|display|touch|cristal)\\b",
+    "\\b(pantalla|modulo|modulos|bateria|baterias|camara|camaras|flex|placa|placas|repuesto|repuestos|cargador|cargadores|cable|funda|vidrio|tactil|auricular|parlante|bocina|microfono|boton|altavoz|tapa|tapas|carcasa|marco|lente|sensor|chip|conector|puerto|lcd|display|touch|cristal|memoria|memorias|microsd|micro sd|tarjeta sd|pasta|termica|precalentadora|precalentadoras|herramienta|herramientas|insumo|insumos|pinza|destornillador|estano|estaño|flux|celular|celulares|telefono|telefonos)\\b",
     // Common search phrases
-    "\\b(precio|stock|disponible|cuanto cuesta|cuanto sale|tienen|busco|necesito|quiero|conseguir)\\b.{0,30}\\b(pantalla|modulo|bateria|camara|flex|placa|repuesto|celular|telefono)\\b",
+    "\\b(precio|stock|disponible|cuanto cuesta|cuanto sale|tienen|busco|necesito|quiero|conseguir)\\b.{0,40}\\b(pantalla|modulo|bateria|camara|flex|placa|repuesto|celular|telefono|memoria|cargador|pasta|precalentadora|herramienta|insumo|tapa)\\b",
   ].join("|"),
   "i"
 );
@@ -140,7 +140,8 @@ const STOP_WORDS = new Set([
   "podria", "podes", "tienen", "puedo", "ver", "lista", "catalogo", "haber",
   "dame", "manda", "mandame", "sos", "son", "mas", "sin", "saber",
   "alguno", "alguna", "donde", "cuando", "cual", "tenes", "info",
-  // NO incluir "precio", "stock", "disponible" — son señales de búsqueda
+  "precio", "precios", "unidad", "unidades",
+  // "stock" y "disponible" se conservan porque ayudan a detectar consultas de disponibilidad.
 ]);
 
 function extractKeywords(text: string): string[] {
@@ -205,7 +206,20 @@ const CATEGORY_HINTS: Record<string, string> = {
   tapa: "tapa",
   carcasa: "tapa",
   cargador: "cargador",
+  cargadores: "cargador",
   charger: "cargador",
+  memoria: "memoria",
+  memorias: "memoria",
+  microsd: "memoria",
+  sd: "memoria",
+  pasta: "herramienta",
+  termica: "herramienta",
+  precalentadora: "herramienta",
+  precalentadoras: "herramienta",
+  herramienta: "herramienta",
+  herramientas: "herramienta",
+  insumo: "herramienta",
+  insumos: "herramienta",
   auricular: "auricular",
   parlante: "auricular",
 };
