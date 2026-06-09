@@ -12,6 +12,8 @@ import { buildAltaProductBotReply, buildAltaProductCaption, type AltaQualityGrou
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
+const ALLOWED_TEST_PHONE = "3765015502";
+const MAINTENANCE_TEXT = "Bot en mantenimiento. Por favor probá de nuevo en unos instantes.";
 
 type GlobalWithIO = {
   io?: {
@@ -21,6 +23,14 @@ type GlobalWithIO = {
 };
 
 const pendingAltaSelections = new Map<string, AltaQualityGroup[]>();
+
+function phoneDigits(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+function isAllowedTesterPhone(phone: string): boolean {
+  return phoneDigits(phone).endsWith(ALLOWED_TEST_PHONE);
+}
 
 // ─── Intent detection ───────────────────────────────────────────────────────
 
@@ -309,6 +319,20 @@ export async function POST(req: NextRequest) {
       if (!conversation) conversation = await createConversation(contact.id);
 
       if (await findMessageByWAId(msg.messageId)) continue;
+
+      if (!isAllowedTesterPhone(msg.from)) {
+        console.log(`[WH] maintenance gate for ${msg.from}`);
+        if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+          try {
+            const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+            await wa.sendTextMessage(msg.from, MAINTENANCE_TEXT);
+            await wa.markAsRead(msg.messageId);
+          } catch (e) {
+            console.error("[WH] maintenance message error", e);
+          }
+        }
+        continue;
+      }
 
       // ── Handle media (image / audio) ──────────────────────────────────
       let transcribedText = msg.text;
