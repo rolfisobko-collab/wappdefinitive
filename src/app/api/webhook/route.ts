@@ -83,9 +83,9 @@ const PRODUCT_INTENT_RE = new RegExp(
     // Brands
     "\\b(iphone|samsung|xiaomi|motorola|oppo|realme|nokia|huawei|lg|sony|apple|poco|redmi|tcl|alcatel|nubia|itel|infinix|tecno)\\b",
     // Part types (accent-stripped)
-    "\\b(pantalla|modulo|modulos|bateria|baterias|camara|camaras|flex|placa|placas|repuesto|repuestos|cargador|cargadores|cable|funda|vidrio|vidirio|glass|glas|tactil|auricular|parlante|bocina|microfono|boton|altavoz|tapa|tapas|carcasa|marco|chasis|lente|sensor|chip|conector|puerto|lcd|display|touch|cristal|templado|hidrogel|lamina|memoria|memorias|microsd|micro sd|tarjeta sd|pasta|passta|termica|precalentadora|precalentadoras|herramienta|herramientas|insumo|insumos|pinza|destornillador|estano|estaño|flux|estacion|soldado|soldador|soldadura|trinocular|microscopio|hilo|jumper|malla|desoldante|wick|aifen|aife|qianli|relife|mechanic|amaoe|luowei|ycs|amtech|celular|celulares|telefono|telefonos)\\b",
+    "\\b(pantalla|modulo|modulos|bateria|baterias|camara|camaras|visor|visores|flex|placa|placas|repuesto|repuestos|cargador|cargadores|cable|funda|vidrio|vidirio|glass|glas|tactil|auricular|parlante|bocina|microfono|boton|altavoz|tapa|tapas|carcasa|marco|chasis|lente|sensor|chip|conector|puerto|lcd|display|touch|cristal|templado|hidrogel|lamina|memoria|memorias|microsd|micro sd|tarjeta sd|pasta|passta|termica|precalentadora|precalentadoras|herramienta|herramientas|insumo|insumos|pinza|destornillador|estano|estaño|flux|estacion|soldado|soldador|soldadura|trinocular|microscopio|hilo|jumper|malla|desoldante|wick|aifen|aife|qianli|relife|mechanic|amaoe|luowei|ycs|amtech|celular|celulares|telefono|telefonos)\\b",
     // Common search phrases
-    "\\b(precio|stock|disponible|cuanto cuesta|cuanto sale|tienen|busco|necesito|quiero|conseguir)\\b.{0,40}\\b(pantalla|modulo|bateria|camara|flex|placa|repuesto|celular|telefono|memoria|cargador|pasta|precalentadora|herramienta|insumo|tapa|chasis|templado|estacion|soldador|hilo|malla|trinocular)\\b",
+    "\\b(precio|stock|disponible|cuanto cuesta|cuanto sale|tienen|busco|necesito|quiero|conseguir)\\b.{0,40}\\b(pantalla|modulo|bateria|camara|visor|flex|placa|repuesto|celular|telefono|memoria|cargador|pasta|precalentadora|herramienta|insumo|tapa|chasis|templado|estacion|soldador|hilo|malla|trinocular)\\b",
   ].join("|"),
   "i"
 );
@@ -207,9 +207,12 @@ const CATEGORY_HINTS: Record<string, string> = {
   pantalla: "modulo",
   display: "modulo",
   lcd: "modulo",
+  visor: "visor de camara",
+  visores: "visor de camara",
+  vidrio: "visor de camara",
   camara: "camara",
   camera: "camara",
-  lente: "camara",
+  lente: "visor de camara",
   flex: "flex",
   placa: "placa",
   board: "placa",

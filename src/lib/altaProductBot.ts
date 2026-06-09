@@ -189,7 +189,12 @@ function wordIncludes(text: string, token: string): boolean {
 }
 
 function findAlias(text: string, aliases: Record<string, string[]>): string | null {
-  for (const [key, values] of Object.entries(aliases)) {
+  const entries = Object.entries(aliases).sort((a, b) => {
+    const longestA = Math.max(...a[1].map((alias) => norm(alias).length));
+    const longestB = Math.max(...b[1].map((alias) => norm(alias).length));
+    return longestB - longestA;
+  });
+  for (const [key, values] of entries) {
     if (values.some((alias) => wordIncludes(text, norm(alias)))) return key;
   }
   return null;
