@@ -8,7 +8,7 @@ import {
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
 import { generateAIResponse, transcribeAudio, filterProductsByRelevance, AIMessage } from "@/lib/ai";
 import { getMongoProducts, getMongoProductById, createOrderInMongo, updateOrderStatus, expandKeywords, MongoProduct } from "@/lib/mongodb";
-import { buildAltaProductBotReply, buildAltaProductCaption, type AltaQualityGroup } from "@/lib/altaProductBot";
+import { buildAltaProductBotReply, buildAltaProductCaption, isAltaProductQuery, type AltaQualityGroup } from "@/lib/altaProductBot";
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
@@ -23,6 +23,7 @@ type GlobalWithIO = {
 };
 
 const pendingAltaSelections = new Map<string, AltaQualityGroup[]>();
+const lastAltaQueryByConversation = new Map<string, string>();
 
 function phoneDigits(value: string): string {
   return value.replace(/\D/g, "");
@@ -93,6 +94,32 @@ const PRODUCT_INTENT_RE = new RegExp(
 function isProductQuery(text: string): boolean {
   const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   return PRODUCT_INTENT_RE.test(normalized);
+}
+
+const PRODUCT_FOLLOWUP_RE = /\b(modelo|valor|precio|sale|cuesta|stock|disponible|disponibilidad|calidad|calidades|ese|esa|este|esta|primero|primera|segundo|segunda|opcion|opciones|sku|codigo|cod)\b|#?\b\d{3,6}\b/i;
+
+function isCatalogLikeMessage(text: string): boolean {
+  return isProductQuery(text) || isAltaProductQuery(text) || PRODUCT_FOLLOWUP_RE.test(text);
+}
+
+function isCatalogFollowUp(text: string): boolean {
+  return PRODUCT_FOLLOWUP_RE.test(text) && !isProductQuery(text) && !isAltaProductQuery(text);
+}
+
+function recentCatalogQuery(messages: Array<Record<string, unknown>>, currentText: string): string | null {
+  let skippedCurrent = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.direction !== "inbound") continue;
+    const content = String(m.content ?? "").trim();
+    if (!content || content.startsWith("[")) continue;
+    if (content === currentText && !skippedCurrent) {
+      skippedCurrent = true;
+      continue;
+    }
+    if (isProductQuery(content) || isAltaProductQuery(content)) return content;
+  }
+  return null;
 }
 
 // ─── AI history builder (excludes product-search exchanges) ─────────────────
@@ -711,15 +738,43 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Alta deterministic product bot. It runs before AI and keeps cart/payment flow intact.
-      try {
-        const { products } = await getMongoProducts({ limit: 5000, onlyAvailable: false });
-        const altaReply = buildAltaProductBotReply(products, textForSearch);
+      const rawMsgs = (freshConv.messages as Array<Record<string, unknown>>) ?? [];
+      const rememberedQuery = lastAltaQueryByConversation.get(conversation.id) ?? recentCatalogQuery(rawMsgs, textForSearch);
+      const forceCatalogBot = isCatalogLikeMessage(textForSearch) || (Boolean(rememberedQuery) && isCatalogFollowUp(textForSearch));
+      const altaQuery = (rememberedQuery && isCatalogFollowUp(textForSearch))
+        ? `${rememberedQuery} ${textForSearch}`
+        : textForSearch;
 
-        if (altaReply.mode !== "ai") {
+      // Alta deterministic product bot. Product/price/stock messages never fall through to free AI.
+      try {
+        if (forceCatalogBot) {
+          const { products } = await getMongoProducts({ limit: 5000, onlyAvailable: false });
+          const altaReply = buildAltaProductBotReply(products, altaQuery);
+
           pendingAltaSelections.delete(conversation.id);
 
+          if (altaReply.mode === "ai") {
+            const safeText = rememberedQuery
+              ? `No tengo datos suficientes para resolver eso con el catalogo. Decime la pieza, marca y modelo exacto, o pasame el SKU.`
+              : `Decime que producto buscas con marca, modelo y pieza. Por ejemplo: "modulo samsung a52" o pasame el SKU.`;
+            const outMsg = await createMessage({
+              conversationId: conversation.id,
+              direction: "outbound",
+              sender: "ai",
+              status: "sent",
+              content: safeText,
+              metadata: JSON.stringify({ isProductSearch: true, altaBot: "safe_clarify" }),
+            });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
+            if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+              const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+              await wa.sendTextMessage(contact.phone, safeText);
+            }
+            continue;
+          }
+
           if (altaReply.mode === "clarify" || altaReply.mode === "not_found") {
+            lastAltaQueryByConversation.set(conversation.id, altaQuery);
             const outMsg = await createMessage({
               conversationId: conversation.id,
               direction: "outbound",
@@ -737,6 +792,7 @@ export async function POST(req: NextRequest) {
           }
 
           if (altaReply.mode === "quality_menu") {
+            lastAltaQueryByConversation.set(conversation.id, altaQuery);
             pendingAltaSelections.set(conversation.id, altaReply.groups);
             const outMsg = await createMessage({
               conversationId: conversation.id,
@@ -773,6 +829,7 @@ export async function POST(req: NextRequest) {
           }
 
           if (altaReply.mode === "direct") {
+            lastAltaQueryByConversation.set(conversation.id, altaQuery);
             const product = altaReply.product;
             const caption = buildAltaProductCaption(product);
             const cardButtons = product.available
@@ -802,6 +859,23 @@ export async function POST(req: NextRequest) {
         }
       } catch (e) {
         console.error("[alta product bot]", e);
+        if (forceCatalogBot) {
+          const safeText = "No pude consultar el catalogo en este momento. Probame de nuevo en unos instantes.";
+          const outMsg = await createMessage({
+            conversationId: conversation.id,
+            direction: "outbound",
+            sender: "ai",
+            status: "sent",
+            content: safeText,
+            metadata: JSON.stringify({ isProductSearch: true, altaBot: "catalog_error" }),
+          });
+          io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
+          if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+            const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+            await wa.sendTextMessage(contact.phone, safeText);
+          }
+          continue;
+        }
       }
 
       const aiConfig = await getAIConfig() as Record<string, unknown>;
@@ -866,7 +940,6 @@ export async function POST(req: NextRequest) {
       }
 
       // Build history — product-search exchanges are excluded from context
-      const rawMsgs = (freshConv.messages as Array<Record<string, unknown>>) ?? [];
       const history = buildAIHistory(rawMsgs);
 
       try {
@@ -881,7 +954,7 @@ export async function POST(req: NextRequest) {
             undefined,
             aiConfig.temperature as number,
             aiConfig.maxTokens as number,
-            aiConfig.includeProducts as boolean,
+            false,
             aiConfig.groqApiKey as string | null,
             [],
           );
