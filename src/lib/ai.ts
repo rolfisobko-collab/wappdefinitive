@@ -31,7 +31,15 @@ export async function filterProductsByRelevance(
   const groq = new Groq({ apiKey: groqApiKey || GROQ_API_KEY });
 
   const list = products
-    .map((p, i) => `${i + 1}. [${p.sku ?? "s/n"}] ${p.name} — ARS ${p.priceARS.toLocaleString("es-AR")}`)
+    .map((p, i) => {
+      let line = `${i + 1}. [${p.sku ?? "s/n"}] ${p.name}`;
+      if (p.partBrand) line += ` | Repuesto: ${p.partBrand}`;
+      if (p.deviceModel) line += ` | Modelo: ${p.deviceModel}`;
+      if (p.tags?.length) line += ` | Tags: ${p.tags.join(", ")}`;
+      if (p.context) line += ` | Contexto: ${p.context}`;
+      line += ` — ARS ${p.priceARS.toLocaleString("es-AR")}`;
+      return line;
+    })
     .join("\n");
 
   const prompt = `El cliente busca: "${userQuery}"

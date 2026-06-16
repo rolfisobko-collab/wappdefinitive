@@ -348,6 +348,11 @@ export interface MongoProduct {
   location: string | null;
   weeklyOffer: boolean;
   liquidation: boolean;
+  partBrand: string;
+  deviceBrand: string;
+  deviceModel: string;
+  tags: string[];
+  context: string;
 }
 
 export async function getMongoProductById(id: string): Promise<MongoProduct | null> {
@@ -363,6 +368,7 @@ export async function getMongoProductById(id: string): Promise<MongoProduct | nu
   if (!p) return null;
   const price = (p.price as number) ?? 0;
   const promoPrice = (p.promoPrice as number | null) ?? null;
+  const legacyBrand = typeof p.brand === "string" && p.brand && !/^[0-9a-f-]{30,}$/i.test(p.brand) ? (p.brand as string) : "";
   return {
     id: p._id as string,
     name: p.name as string,
@@ -380,6 +386,11 @@ export async function getMongoProductById(id: string): Promise<MongoProduct | nu
     location: (p.location as string) ?? null,
     weeklyOffer: (p.weeklyOffer as boolean) ?? false,
     liquidation: (p.liquidation as boolean) ?? false,
+    partBrand: (p.partBrand as string) || legacyBrand,
+    deviceBrand: (p.deviceBrand as string) || "",
+    deviceModel: (p.deviceModel as string) || "",
+    tags: Array.isArray(p.tags) ? (p.tags as string[]) : [],
+    context: (p.context as string) || "",
   };
 }
 
@@ -473,21 +484,37 @@ export async function getMongoProducts(opts: {
         throw new Error("atlas empty");
       }
     } catch {
-      // 2. Fallback: exact AND regex on raw keywords
-      const andFilter = { ...baseFilter, ...buildSearchFilter(rawKeywords) };
+      // 2. Fallback: exact AND regex on raw keywords (name + brand + tags + context)
+      const buildEnrichedFilter = (kws: string[]): Record<string, unknown> => {
+        if (kws.length === 1) {
+          const re = { $regex: accentRegex(kws[0]), $options: "i" };
+          return { $or: [{ name: re }, { brand: re }, { partBrand: re }, { tags: re }, { context: re }] };
+        }
+        return {
+          $and: kws.map((k) => {
+            const re = { $regex: accentRegex(k), $options: "i" };
+            return { $or: [{ name: re }, { brand: re }, { partBrand: re }, { tags: re }, { context: re }] };
+          }),
+        };
+      };
+
+      const andFilter = { ...baseFilter, ...buildEnrichedFilter(rawKeywords) };
       raw = await db.collection("stock").find(andFilter).limit(lim).toArray();
 
       // 3. Expand synonyms if still nothing
       if (raw.length === 0) {
         const expanded = expandKeywords(rawKeywords);
-        const r2 = await db.collection("stock").find({ ...baseFilter, ...buildSearchFilter(expanded) }).limit(lim).toArray();
+        const r2 = await db.collection("stock").find({ ...baseFilter, ...buildEnrichedFilter(expanded) }).limit(lim).toArray();
         raw = r2;
       }
 
-      // 4. OR fallback — last resort
+      // 4. OR fallback across all enriched fields — last resort
       if (raw.length === 0) {
-        const orFilter = { ...baseFilter, ...buildSearchFilterOr(rawKeywords) };
-        raw = await db.collection("stock").find(orFilter).limit(lim).toArray();
+        const orTerms = rawKeywords.map((k) => {
+          const re = { $regex: accentRegex(k), $options: "i" };
+          return { $or: [{ name: re }, { brand: re }, { partBrand: re }, { tags: re }, { context: re }] };
+        });
+        raw = await db.collection("stock").find({ ...baseFilter, $or: orTerms }).limit(lim).toArray();
       }
     }
   } else {
@@ -497,6 +524,7 @@ export async function getMongoProducts(opts: {
   const products: MongoProduct[] = raw.map((p) => {
     const price = (p.price as number) ?? 0;
     const promoPrice = (p.promoPrice as number | null) ?? null;
+    const legacyBrand = typeof p.brand === "string" && p.brand && !/^[0-9a-f-]{30,}$/i.test(p.brand) ? (p.brand as string) : "";
     return {
       id: p._id as string,
       name: p.name as string,
@@ -517,6 +545,11 @@ export async function getMongoProducts(opts: {
       location: (p.location as string) ?? null,
       weeklyOffer: (p.weeklyOffer as boolean) ?? false,
       liquidation: (p.liquidation as boolean) ?? false,
+      partBrand: (p.partBrand as string) || legacyBrand,
+      deviceBrand: (p.deviceBrand as string) || "",
+      deviceModel: (p.deviceModel as string) || "",
+      tags: Array.isArray(p.tags) ? (p.tags as string[]) : [],
+      context: (p.context as string) || "",
     };
   });
 

@@ -1009,6 +1009,9 @@ export async function POST(req: NextRequest) {
                 `📦 *${product.name}*\n` +
                 (product.sku ? `🔢 SKU: ${product.sku}\n` : "") +
                 (product.category ? `🏷️ ${product.category}\n` : "") +
+                (product.partBrand ? `🔧 Marca repuesto: ${product.partBrand}\n` : "") +
+                (product.deviceModel ? `📱 Modelo: ${product.deviceModel}\n` : "") +
+                (product.tags?.length ? `🔑 ${product.tags.join(", ")}\n` : "") +
                 `💵 ${new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(product.promoPriceARS ?? product.priceARS)}${product.promoPriceARS ? ` (antes ${new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(product.priceARS)})` : ""}\n` +
                 (product.available ? `✅ Disponible` : `❌ Sin stock`);
 
