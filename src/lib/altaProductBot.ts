@@ -412,7 +412,7 @@ function looseProductFallback(products: MongoProduct[], query: string, cls: Alta
   }));
 }
 
-function metadataExactMatches(products: MongoProduct[], query: string): MongoProduct[] {
+function metadataExactMatches(products: MongoProduct[], query: string, includeContext = true): MongoProduct[] {
   const tokens = expandedQueryTokens(query).filter((token) => !["cod", "codigo", "para"].includes(token));
   if (!tokens.length) return [];
 
@@ -422,6 +422,7 @@ function metadataExactMatches(products: MongoProduct[], query: string): MongoPro
     return tokens.every((token) => tags.includes(token));
   }));
   if (exactTagMatches.length) return exactTagMatches;
+  if (!includeContext) return [];
 
   return sortProducts(products.filter((product) => {
     if (product.price <= 0) return false;
@@ -530,7 +531,7 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
     };
   }
 
-  const metadataMatches = forceSearch ? metadataExactMatches(products, query) : [];
+  const metadataMatches = metadataExactMatches(products, query, forceSearch);
   let all = metadataMatches.length ? metadataMatches : filterProducts(products, cls);
   if (!all.length) all = looseProductFallback(products, query, cls);
   const available = all.filter((p) => p.available);
