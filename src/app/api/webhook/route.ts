@@ -12,8 +12,6 @@ import { buildAltaProductBotReply, buildAltaProductCaption, isAltaProductQuery, 
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
-const ALLOWED_TEST_PHONE = "3765015502";
-const MAINTENANCE_TEXT = "Bot en mantenimiento. Por favor probá de nuevo en unos instantes.";
 
 type GlobalWithIO = {
   io?: {
@@ -24,14 +22,6 @@ type GlobalWithIO = {
 
 const pendingAltaSelections = new Map<string, AltaQualityGroup[]>();
 const lastAltaQueryByConversation = new Map<string, string>();
-
-function phoneDigits(value: string): string {
-  return value.replace(/\D/g, "");
-}
-
-function isAllowedTesterPhone(phone: string): boolean {
-  return phoneDigits(phone).endsWith(ALLOWED_TEST_PHONE);
-}
 
 // ─── Intent detection ───────────────────────────────────────────────────────
 
@@ -104,6 +94,19 @@ function isCatalogLikeMessage(text: string): boolean {
 
 function isCatalogFollowUp(text: string): boolean {
   return PRODUCT_FOLLOWUP_RE.test(text) && !isProductQuery(text) && !isAltaProductQuery(text);
+}
+
+function shouldProbeCatalogMetadata(text: string): boolean {
+  const normalized = text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized.length < 4) return false;
+  if (/^(hola|buenas|buen dia|buenas tardes|buenas noches|gracias|ok|dale|si|no)$/.test(normalized)) return false;
+  return normalized.split(/\s+/).some((word) => word.length >= 4 || /\d/.test(word));
 }
 
 function recentCatalogQuery(messages: Array<Record<string, unknown>>, currentText: string): string | null {
@@ -349,20 +352,6 @@ export async function POST(req: NextRequest) {
       if (!conversation) conversation = await createConversation(contact.id);
 
       if (await findMessageByWAId(msg.messageId)) continue;
-
-      if (!isAllowedTesterPhone(msg.from)) {
-        console.log(`[WH] maintenance gate for ${msg.from}`);
-        if (waConfig?.phoneNumberId && waConfig?.accessToken) {
-          try {
-            const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
-            await wa.sendTextMessage(msg.from, MAINTENANCE_TEXT);
-            await wa.markAsRead(msg.messageId);
-          } catch (e) {
-            console.error("[WH] maintenance message error", e);
-          }
-        }
-        continue;
-      }
 
       // ── Handle media (image / audio) ──────────────────────────────────
       let transcribedText = msg.text;
@@ -740,7 +729,12 @@ export async function POST(req: NextRequest) {
 
       const rawMsgs = (freshConv.messages as Array<Record<string, unknown>>) ?? [];
       const rememberedQuery = lastAltaQueryByConversation.get(conversation.id) ?? recentCatalogQuery(rawMsgs, textForSearch);
-      const forceCatalogBot = isCatalogLikeMessage(textForSearch) || (Boolean(rememberedQuery) && isCatalogFollowUp(textForSearch));
+      let metadataCatalogHit = false;
+      if (!isCatalogLikeMessage(textForSearch) && shouldProbeCatalogMetadata(textForSearch)) {
+        const probe = await getMongoProducts({ search: textForSearch, limit: 1, onlyAvailable: false });
+        metadataCatalogHit = probe.products.length > 0;
+      }
+      const forceCatalogBot = isCatalogLikeMessage(textForSearch) || metadataCatalogHit || (Boolean(rememberedQuery) && isCatalogFollowUp(textForSearch));
       const altaQuery = (rememberedQuery && isCatalogFollowUp(textForSearch))
         ? `${rememberedQuery} ${textForSearch}`
         : textForSearch;
@@ -749,7 +743,7 @@ export async function POST(req: NextRequest) {
       try {
         if (forceCatalogBot) {
           const { products } = await getMongoProducts({ limit: 5000, onlyAvailable: false });
-          const altaReply = buildAltaProductBotReply(products, altaQuery);
+          const altaReply = buildAltaProductBotReply(products, altaQuery, metadataCatalogHit);
 
           pendingAltaSelections.delete(conversation.id);
 

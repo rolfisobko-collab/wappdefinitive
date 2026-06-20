@@ -34,9 +34,12 @@ export async function filterProductsByRelevance(
     .map((p, i) => {
       let line = `${i + 1}. [${p.sku ?? "s/n"}] ${p.name}`;
       if (p.partBrand) line += ` | Repuesto: ${p.partBrand}`;
+      if (p.deviceBrand) line += ` | Marca equipo: ${p.deviceBrand}`;
       if (p.deviceModel) line += ` | Modelo: ${p.deviceModel}`;
       if (p.tags?.length) line += ` | Tags: ${p.tags.join(", ")}`;
+      if (p.categoryTags?.length) line += ` | Tags categoria: ${p.categoryTags.join(", ")}`;
       if (p.context) line += ` | Contexto: ${p.context}`;
+      if (p.categoryContext) line += ` | Contexto categoria: ${p.categoryContext}`;
       line += ` — ARS ${p.priceARS.toLocaleString("es-AR")}`;
       return line;
     })
@@ -90,7 +93,13 @@ async function buildProductCatalogContext(): Promise<string> {
 
     const catLines = categories
       .filter((c) => catMap[c.id]?.total > 0)
-      .map((c) => `  • ${c.name}: ${catMap[c.id].total} productos`)
+      .map((c) => {
+        const metadata = [
+          c.tags?.length ? `tags: ${c.tags.join(", ")}` : null,
+          c.context ? `contexto: ${c.context}` : null,
+        ].filter(Boolean).join(" | ");
+        return `  • ${c.name}: ${catMap[c.id].total} productos${metadata ? ` (${metadata})` : ""}`;
+      })
       .join("\n");
 
     return `\n\n--- CATÁLOGO ALTA TELEFONÍA (precios al cliente en pesos argentinos) ---
@@ -143,7 +152,16 @@ export async function generateAIResponse(
           ? `ARS ${p.promoPriceARS.toLocaleString("es-AR")} (oferta, antes ARS ${p.priceARS.toLocaleString("es-AR")})`
           : `ARS ${p.priceARS.toLocaleString("es-AR")}`;
         const cat = p.category ? ` [${p.category}]` : "";
-        return `- ${p.name}${cat} | ${price} | ${stockLabel}`;
+        const details = [
+          p.partBrand ? `Marca repuesto: ${p.partBrand}` : null,
+          p.deviceBrand ? `Marca equipo: ${p.deviceBrand}` : null,
+          p.deviceModel ? `Modelo: ${p.deviceModel}` : null,
+          p.tags?.length ? `Tags: ${p.tags.join(", ")}` : null,
+          p.categoryTags?.length ? `Tags categoria: ${p.categoryTags.join(", ")}` : null,
+          p.context ? `Contexto: ${p.context}` : null,
+          p.categoryContext ? `Contexto categoria: ${p.categoryContext}` : null,
+        ].filter(Boolean).join(" | ");
+        return `- ${p.name}${cat} | ${price} | ${stockLabel}${details ? ` | ${details}` : ""}`;
       });
       prompt += `\n\n--- PRODUCTOS ENCONTRADOS (precios al cliente en pesos argentinos) ---\n${lines.join("\n")}\n--- FIN ---\n\n⚠️ REGLAS ESTRICTAS PARA ESTE MENSAJE:\n1. Presentá SOLO los productos de la lista de arriba — no inventes ni agregues otros.\n2. Si hay productos disponibles: mostrá nombre, precio en pesos argentinos y estado de stock.\n3. Si hay productos sin stock: avisalo claramente igual.\n4. No muestres precios en dólares al cliente.\n5. No menciones cantidades exactas de stock; solo Disponible o Sin stock.\n6. Sé breve: máx 3-4 líneas por producto.\n7. No menciones temas anteriores de la conversación.\n8. Si el cliente escribió mal el modelo (ej: "13 pro maxx") igual mostrá lo que encontraste más cercano.\n9. Invitá a agregar al carrito con el botón que aparece debajo.`;
     } else {

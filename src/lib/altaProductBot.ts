@@ -250,8 +250,27 @@ function extractModel(raw: string, brand: string | null): string | null {
   return null;
 }
 
+function productHaystack(product: MongoProduct): string {
+  return [
+    product.searchText,
+    product.name,
+    product.category,
+    product.sku,
+    product.description,
+    product.partBrand,
+    product.deviceBrand,
+    product.deviceModel,
+    product.tags,
+    product.context,
+    product.categoryTags,
+    product.categoryContext,
+  ].flat().filter(Boolean).join(" ");
+}
+
 function detectProductBrand(product: MongoProduct): string | null {
-  return extractBrand(product.name);
+  const deviceBrand = extractBrand(product.deviceBrand);
+  if (deviceBrand) return deviceBrand;
+  return extractBrand(productHaystack(product));
 }
 
 function detectProductQuality(product: MongoProduct): string {
@@ -259,7 +278,7 @@ function detectProductQuality(product: MongoProduct): string {
 }
 
 function detectReplacementMeta(product: MongoProduct) {
-  const full = `${norm(product.name)} ${norm(product.category)}`;
+  const full = norm(productHaystack(product));
   const found = Object.keys(QUALITY_ALIASES).filter((quality) =>
     QUALITY_ALIASES[quality].some((alias) => wordIncludes(full, norm(alias)))
   );
@@ -273,14 +292,16 @@ function detectReplacementMeta(product: MongoProduct) {
 
 function categoryMatches(product: MongoProduct, partType: string): boolean {
   const category = norm(product.category);
-  const name = norm(product.name);
+  const haystack = norm(productHaystack(product));
   const targets = CATEGORY_MATCH[partType] ?? [partType];
   return targets.some((target) => category.includes(norm(target))) ||
-    (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(name, norm(alias)));
+    targets.some((target) => wordIncludes(haystack, norm(target)) || haystack.includes(norm(target))) ||
+    (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(haystack, norm(alias)) || haystack.includes(norm(alias)));
 }
 
 function modelMatches(product: MongoProduct, model: string): boolean {
-  const productName = product.name.toUpperCase();
+  const productName = productHaystack(product).toUpperCase();
+  if (norm(product.deviceModel) === norm(model) || norm(product.deviceModel).includes(norm(model))) return true;
   const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
   const suffixes = ["MAX", "PLUS", "ULTRA", "MINI", "LITE", "FE", "PRO"];
   const modelParts = model.toUpperCase().split(/\s+/);
@@ -293,7 +314,7 @@ function classifyProduct(product: MongoProduct) {
   const brand = detectProductBrand(product);
   return {
     brand,
-    model: extractModel(product.name, brand),
+    model: product.deviceModel || extractModel(productHaystack(product), brand),
     quality: detectProductQuality(product),
   };
 }
@@ -335,7 +356,7 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
 
   if (cls.partType) result = result.filter((p) => categoryMatches(p, cls.partType as string));
   if (cls.brand) {
-    const withBrand = result.filter((p) => detectProductBrand(p) === cls.brand || norm(p.name).includes(norm(cls.brand)));
+    const withBrand = result.filter((p) => detectProductBrand(p) === cls.brand || norm(productHaystack(p)).includes(norm(cls.brand)));
     if (withBrand.length > 0 || !cls.partType || !GENERIC_ACCESSORY_PARTS.has(cls.partType)) result = withBrand;
   }
   if (cls.model) {
@@ -343,7 +364,7 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
     if (withModel.length > 0 || !cls.partType || !GENERIC_ACCESSORY_PARTS.has(cls.partType)) result = withModel;
   }
   if (cls.quality) {
-    const withQuality = result.filter((p) => detectProductQuality(p) === cls.quality || norm(p.name).includes(norm(cls.quality)));
+    const withQuality = result.filter((p) => detectProductQuality(p) === cls.quality || norm(productHaystack(p)).includes(norm(cls.quality)));
     if (withQuality.length > 0) result = withQuality;
   }
 
@@ -379,7 +400,7 @@ function looseProductFallback(products: MongoProduct[], query: string, cls: Alta
 
   return sortProducts(products.filter((product) => {
     if (product.price <= 0) return false;
-    const haystack = `${norm(product.name)} ${norm(product.category)} ${norm(product.sku)}`;
+    const haystack = norm(productHaystack(product));
     let score = 0;
     for (const token of tokens) {
       if (haystack.includes(token)) score += /^\d+$/.test(token) ? 3 : 1;
@@ -462,11 +483,11 @@ export function buildAltaProductCaption(product: MongoProduct): string {
   ].filter(Boolean).join("\n");
 }
 
-export function buildAltaProductBotReply(products: MongoProduct[], query: string): AltaBotReply {
-  if (!isAltaProductQuery(query)) return { mode: "ai" };
+export function buildAltaProductBotReply(products: MongoProduct[], query: string, forceSearch = false): AltaBotReply {
+  if (!forceSearch && !isAltaProductQuery(query)) return { mode: "ai" };
 
   const cls = classifyAltaQuery(query);
-  if (!cls.partType && !cls.brand && !cls.model && !cls.sku) return { mode: "ai" };
+  if (!forceSearch && !cls.partType && !cls.brand && !cls.model && !cls.sku) return { mode: "ai" };
 
   if (!cls.partType && (cls.brand || cls.model) && !cls.sku) {
     return {

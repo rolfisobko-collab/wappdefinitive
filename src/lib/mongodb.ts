@@ -353,6 +353,50 @@ export interface MongoProduct {
   deviceModel: string;
   tags: string[];
   context: string;
+  categoryTags: string[];
+  categoryContext: string;
+  searchText: string;
+}
+
+type CategoryMeta = {
+  name: string;
+  tags: string[];
+  context: string;
+};
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function normalizeCategoryKey(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function buildCategoryMeta(catDocs: Record<string, unknown>[]): Record<string, CategoryMeta> {
+  const meta: Record<string, CategoryMeta> = {};
+  for (const c of catDocs) {
+    const row = {
+      name: String(c.name || ""),
+      tags: asStringArray(c.tags),
+      context: String(c.context || ""),
+    };
+    const id = normalizeCategoryKey(c._id);
+    if (id) meta[id] = row;
+    if (row.name) meta[row.name] = row;
+  }
+  return meta;
+}
+
+function categoryMetaFor(categoryMeta: Record<string, CategoryMeta>, category: unknown): CategoryMeta {
+  return categoryMeta[normalizeCategoryKey(category)] ?? { name: typeof category === "string" ? category : "", tags: [], context: "" };
+}
+
+function productSearchText(parts: unknown[]): string {
+  return parts
+    .flatMap((part) => Array.isArray(part) ? part : [part])
+    .map((part) => String(part ?? ""))
+    .filter(Boolean)
+    .join(" ");
 }
 
 export async function getMongoProductById(id: string): Promise<MongoProduct | null> {
@@ -360,15 +404,25 @@ export async function getMongoProductById(id: string): Promise<MongoProduct | nu
   const rateDoc = await db.collection("exchangeRates").findOne({ _id: "USD_ARS" } as object);
   const dbRate = (rateDoc as Record<string, unknown> | null)?.rate as number | undefined;
   const usdToArs: number = Math.max(Number(dbRate ?? MIN_USD_ARS_RATE), MIN_USD_ARS_RATE);
-  const catDocs = await db.collection("stockCategories").find({}).toArray();
+  const catDocs = await db.collection("stockCategories").find({}).toArray() as Record<string, unknown>[];
   const catMap: Record<string, string> = {};
   for (const c of catDocs) catMap[c._id as string] = c.name as string;
+  const categoryMeta = buildCategoryMeta(catDocs);
 
   const p = await db.collection("stock").findOne({ _id: id } as object);
   if (!p) return null;
   const price = (p.price as number) ?? 0;
   const promoPrice = (p.promoPrice as number | null) ?? null;
   const legacyBrand = typeof p.brand === "string" && p.brand && !/^[0-9a-f-]{30,}$/i.test(p.brand) ? (p.brand as string) : "";
+  const cat = categoryMetaFor(categoryMeta, p.category);
+  const productTags = asStringArray(p.tags);
+  const categoryTags = cat.tags;
+  const context = (p.context as string) || "";
+  const categoryContext = cat.context;
+  const categoryName = (catMap[p.category as string] ?? cat.name) || (typeof p.category === "string" ? p.category : null);
+  const partBrand = (p.partBrand as string) || legacyBrand;
+  const deviceBrand = (p.deviceBrand as string) || "";
+  const deviceModel = (p.deviceModel as string) || "";
   return {
     id: p._id as string,
     name: p.name as string,
@@ -379,18 +433,25 @@ export async function getMongoProductById(id: string): Promise<MongoProduct | nu
     images: ((p.images as string[] | undefined) ?? []).filter(Boolean),
     stock: (p.quantity as number) ?? 0,
     available: ((p.quantity as number) ?? 0) > 0,
-    category: catMap[p.category as string] ?? (typeof p.category === "string" ? p.category : null),
+    category: categoryName,
     categoryId: catMap[p.category as string] ? (p.category as string) : null,
     sku: (p.sku as number) ?? null,
     description: ((p.description as string) || "").slice(0, 300),
     location: (p.location as string) ?? null,
     weeklyOffer: (p.weeklyOffer as boolean) ?? false,
     liquidation: (p.liquidation as boolean) ?? false,
-    partBrand: (p.partBrand as string) || legacyBrand,
-    deviceBrand: (p.deviceBrand as string) || "",
-    deviceModel: (p.deviceModel as string) || "",
-    tags: Array.isArray(p.tags) ? (p.tags as string[]) : [],
-    context: (p.context as string) || "",
+    partBrand,
+    deviceBrand,
+    deviceModel,
+    tags: productTags,
+    context,
+    categoryTags,
+    categoryContext,
+    searchText: productSearchText([
+      p.name, p.sku, p.description, p.markdownDescription, categoryName,
+      p.brand, partBrand, deviceBrand, deviceModel,
+      productTags, context, categoryTags, categoryContext,
+    ]),
   };
 }
 
@@ -401,7 +462,7 @@ export async function getMongoProducts(opts: {
   limit?: number;
   onlyAvailable?: boolean;
   exact?: boolean; // if true: skip synonym expansion, go straight to AND regex
-} = {}): Promise<{ products: MongoProduct[]; categories: { id: string; name: string; icon?: string }[]; usdToArs: number }> {
+} = {}): Promise<{ products: MongoProduct[]; categories: { id: string; name: string; icon?: string; tags: string[]; context: string }[]; usdToArs: number }> {
   const db = await getMongoDB();
 
   // Exchange rate
@@ -410,13 +471,16 @@ export async function getMongoProducts(opts: {
   const usdToArs: number = Math.max(Number(dbRate ?? MIN_USD_ARS_RATE), MIN_USD_ARS_RATE);
 
   // Categories map
-  const catDocs = await db.collection("stockCategories").find({}).toArray();
+  const catDocs = await db.collection("stockCategories").find({}).toArray() as Record<string, unknown>[];
   const catMap: Record<string, string> = {};
   for (const c of catDocs) catMap[c._id as string] = c.name as string;
+  const categoryMeta = buildCategoryMeta(catDocs);
   const categories = catDocs.map((c) => ({
     id: c._id as string,
     name: c.name as string,
     icon: c.icon as string | undefined,
+    tags: asStringArray(c.tags),
+    context: String(c.context || ""),
   })).sort((a, b) => a.name.localeCompare(b.name));
 
   // Base filter
@@ -428,6 +492,15 @@ export async function getMongoProducts(opts: {
   if (opts.onlyAvailable) baseFilter.quantity = { $gt: 0 };
 
   let raw;
+  const enrichedDocText = (p: Record<string, unknown>) => {
+    const cat = categoryMetaFor(categoryMeta, p.category);
+    const legacyBrand = typeof p.brand === "string" && p.brand && !/^[0-9a-f-]{30,}$/i.test(p.brand) ? p.brand : "";
+    return productSearchText([
+      p.name, p.sku, p.description, p.markdownDescription, cat.name,
+      p.brand, p.partBrand || legacyBrand, p.deviceBrand, p.deviceModel,
+      asStringArray(p.tags), p.context, cat.tags, cat.context,
+    ]).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  };
 
   if (opts.keywords?.length || opts.search) {
     const rawKeywords = opts.keywords ?? (opts.search ? [opts.search] : []);
@@ -516,6 +589,24 @@ export async function getMongoProducts(opts: {
         });
         raw = await db.collection("stock").find({ ...baseFilter, $or: orTerms }).limit(lim).toArray();
       }
+
+      // 5. Category metadata fallback: lets category tags/context guide the bot
+      // without denormalizing every product document in Mongo.
+      if (raw.length === 0) {
+        const normalizedTerms = rawKeywords
+          .flatMap((keyword) => expandKeywords([keyword]))
+          .map((keyword) => keyword.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""))
+          .filter(Boolean);
+        const candidates = await db.collection("stock").find(baseFilter).limit(2000).toArray() as Record<string, unknown>[];
+        raw = candidates
+          .filter((candidate) => {
+            const text = enrichedDocText(candidate);
+            return normalizedTerms.length <= 1
+              ? normalizedTerms.some((term) => text.includes(term))
+              : normalizedTerms.every((term) => text.includes(term));
+          })
+          .slice(0, lim);
+      }
     }
   } else {
     raw = await db.collection("stock").find(baseFilter).limit(opts.limit ?? 300).toArray();
@@ -525,6 +616,15 @@ export async function getMongoProducts(opts: {
     const price = (p.price as number) ?? 0;
     const promoPrice = (p.promoPrice as number | null) ?? null;
     const legacyBrand = typeof p.brand === "string" && p.brand && !/^[0-9a-f-]{30,}$/i.test(p.brand) ? (p.brand as string) : "";
+    const cat = categoryMetaFor(categoryMeta, p.category);
+    const productTags = asStringArray(p.tags);
+    const categoryTags = cat.tags;
+    const context = (p.context as string) || "";
+    const categoryContext = cat.context;
+    const categoryName = (catMap[p.category as string] ?? cat.name) || (typeof p.category === "string" ? p.category : null);
+    const partBrand = (p.partBrand as string) || legacyBrand;
+    const deviceBrand = (p.deviceBrand as string) || "";
+    const deviceModel = (p.deviceModel as string) || "";
     return {
       id: p._id as string,
       name: p.name as string,
@@ -538,18 +638,25 @@ export async function getMongoProducts(opts: {
       images: ((p.images as string[] | undefined) ?? []).filter(Boolean),
       stock: (p.quantity as number) ?? 0,
       available: ((p.quantity as number) ?? 0) > 0,
-      category: catMap[p.category as string] ?? (typeof p.category === "string" ? p.category : null),
+      category: categoryName,
       categoryId: catMap[p.category as string] ? (p.category as string) : null,
       sku: (p.sku as number) ?? null,
       description: ((p.description as string) || (p.markdownDescription as string) || "").slice(0, 300),
       location: (p.location as string) ?? null,
       weeklyOffer: (p.weeklyOffer as boolean) ?? false,
       liquidation: (p.liquidation as boolean) ?? false,
-      partBrand: (p.partBrand as string) || legacyBrand,
-      deviceBrand: (p.deviceBrand as string) || "",
-      deviceModel: (p.deviceModel as string) || "",
-      tags: Array.isArray(p.tags) ? (p.tags as string[]) : [],
-      context: (p.context as string) || "",
+      partBrand,
+      deviceBrand,
+      deviceModel,
+      tags: productTags,
+      context,
+      categoryTags,
+      categoryContext,
+      searchText: productSearchText([
+        p.name, p.sku, p.description, p.markdownDescription, categoryName,
+        p.brand, partBrand, deviceBrand, deviceModel,
+        productTags, context, categoryTags, categoryContext,
+      ]),
     };
   });
 
