@@ -84,7 +84,7 @@ async function buildProductCatalogContext(): Promise<string> {
     const db = await getMongoDB();
 
     const counts = await db.collection("stock").aggregate([
-      { $match: { isActive: { $ne: false }, price: { $gt: 0 } } },
+      { $match: { price: { $gt: 0 } } },
       { $group: { _id: "$category", total: { $sum: 1 }, conStock: { $sum: { $cond: [{ $gt: ["$quantity", 0] }, 1, 0] } } } },
     ]).toArray() as Array<{ _id: string; total: number; conStock: number }>;
 

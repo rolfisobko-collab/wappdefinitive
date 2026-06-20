@@ -485,7 +485,6 @@ export async function getMongoProducts(opts: {
 
   // Base filter
   const baseFilter: Record<string, unknown> = {
-    isActive: { $ne: false },
     price:    { $gt: 0 },
   };
   if (opts.categoryId)  baseFilter.category = opts.categoryId;
@@ -546,7 +545,7 @@ export async function getMongoProducts(opts: {
           },
         },
         { $addFields: { score: { $meta: "searchScore" } } },
-        { $match: { isActive: { $ne: false }, price: { $gt: 0 }, ...(opts.onlyAvailable ? { quantity: { $gt: 0 } } : {}), ...(opts.categoryId ? { category: opts.categoryId } : {}) } },
+        { $match: { price: { $gt: 0 }, ...(opts.onlyAvailable ? { quantity: { $gt: 0 } } : {}), ...(opts.categoryId ? { category: opts.categoryId } : {}) } },
         { $sort: { score: -1 } },
         { $limit: lim },
       ]).toArray();
