@@ -416,18 +416,24 @@ function metadataExactMatches(products: MongoProduct[], query: string): MongoPro
   const tokens = expandedQueryTokens(query).filter((token) => !["cod", "codigo", "para"].includes(token));
   if (!tokens.length) return [];
 
+  const exactTagMatches = sortProducts(products.filter((product) => {
+    if (product.price <= 0) return false;
+    const tags = (product.tags ?? []).map((tag) => norm(tag));
+    return tokens.every((token) => tags.includes(token));
+  }));
+  if (exactTagMatches.length) return exactTagMatches;
+
   return sortProducts(products.filter((product) => {
     if (product.price <= 0) return false;
-    const metadata = norm([
-      product.tags,
+    const metadata = ` ${norm([
       product.context,
       product.categoryTags,
       product.categoryContext,
-    ].flat().filter(Boolean).join(" "));
+    ].flat().filter(Boolean).join(" "))} `;
     if (!metadata) return false;
     return tokens.length <= 1
-      ? tokens.some((token) => metadata.includes(token))
-      : tokens.every((token) => metadata.includes(token));
+      ? tokens.some((token) => wordIncludes(metadata, token))
+      : tokens.every((token) => wordIncludes(metadata, token));
   }));
 }
 
