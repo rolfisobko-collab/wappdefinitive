@@ -6,6 +6,7 @@ export type AltaClassification = {
   brand: string | null;
   model: string | null;
   quality: string | null;
+  excludedPartTypes: string[];
   confidence: number;
 };
 
@@ -32,7 +33,7 @@ const BRANDS = [
 ];
 
 const BRAND_ALIASES: Record<string, string[]> = {
-  IPHONE: ["iphone", "apple"],
+  IPHONE: ["iphone", "iph", "ip", "apple"],
   SAMSUNG: ["samsung", "galaxy"],
   MOTOROLA: ["motorola", "moto"],
   XIAOMI: ["xiaomi", "redmi", "poco", "mi"],
@@ -85,7 +86,7 @@ const PART_ALIASES: Record<string, string[]> = {
 };
 
 const CATEGORY_MATCH: Record<string, string[]> = {
-  "PLACA DE CARGA": ["placa de carga"],
+  "PLACA DE CARGA": ["placa de carga", "flex de carga", "pin de carga", "pines de carga"],
   "FLEX DE CARGA": ["flex de carga"],
   "FLEX MAIN": ["main flex"],
   "POWER FLEX": ["power flex"],
@@ -200,6 +201,23 @@ function findAlias(text: string, aliases: Record<string, string[]>): string | nu
   return null;
 }
 
+function findAliases(text: string, aliases: Record<string, string[]>): string[] {
+  return Object.keys(aliases).filter((key) =>
+    aliases[key].some((alias) => wordIncludes(text, norm(alias)))
+  );
+}
+
+function stripNegatedPartAliases(text: string): string {
+  let cleaned = ` ${text} `;
+  for (const aliases of Object.values(PART_ALIASES)) {
+    for (const alias of aliases.map(norm).sort((a, b) => b.length - a.length)) {
+      const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+      cleaned = cleaned.replace(new RegExp(`\\b(?:no|sin)\\s+${escaped}\\b`, "gi"), " ");
+    }
+  }
+  return cleaned.replace(/\s+/g, " ").trim();
+}
+
 function extractSku(raw: string): string | null {
   const m = raw.match(/(?:c[oó]d(?:igo)?\.?\s*#?\s*)?\b([A-Z]{1,6}\.?\d{2,6}|\d{3,6})\b/i);
   return m ? m[1].toUpperCase() : null;
@@ -292,16 +310,27 @@ function detectReplacementMeta(product: MongoProduct) {
 
 function categoryMatches(product: MongoProduct, partType: string): boolean {
   const category = norm(product.category);
-  const haystack = norm(productHaystack(product));
+  const partText = norm([
+    product.name,
+    product.category,
+    product.tags,
+    product.categoryTags,
+  ].flat().filter(Boolean).join(" "));
   const targets = CATEGORY_MATCH[partType] ?? [partType];
   return targets.some((target) => category.includes(norm(target))) ||
-    targets.some((target) => wordIncludes(haystack, norm(target)) || haystack.includes(norm(target))) ||
-    (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(haystack, norm(alias)) || haystack.includes(norm(alias)));
+    targets.some((target) => wordIncludes(partText, norm(target)) || partText.includes(norm(target))) ||
+    (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(partText, norm(alias)) || partText.includes(norm(alias)));
 }
 
 function modelMatches(product: MongoProduct, model: string): boolean {
   const productName = productHaystack(product).toUpperCase();
-  if (norm(product.deviceModel) === norm(model) || norm(product.deviceModel).includes(norm(model))) return true;
+  const productDeviceModel = norm(product.deviceModel);
+  const wantedModel = norm(model);
+  if (productDeviceModel) {
+    if (productDeviceModel === wantedModel) return true;
+    if (productDeviceModel.endsWith(` ${wantedModel}`)) return true;
+    if (wantedModel.includes(" ") && productDeviceModel.endsWith(wantedModel)) return true;
+  }
   const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
   const suffixes = ["MAX", "PLUS", "ULTRA", "MINI", "LITE", "FE", "PRO"];
   const modelParts = model.toUpperCase().split(/\s+/);
@@ -321,13 +350,17 @@ function classifyProduct(product: MongoProduct) {
 
 export function classifyAltaQuery(query: string): AltaClassification {
   const text = norm(query);
+  const positiveText = stripNegatedPartAliases(text);
   const sku = extractSku(query);
-  const partType = findAlias(text, PART_ALIASES);
+  const partType = findAlias(positiveText, PART_ALIASES);
+  const excludedPartTypes = findAliases(text, PART_ALIASES)
+    .filter((part) => !partType || part !== partType)
+    .filter((part) => new RegExp(`\\b(?:no|sin)\\s+${part.toLowerCase().replace(/\s+/g, "\\s+")}\\b`).test(text));
   const brand = extractBrand(query);
   const quality = findAlias(text, QUALITY_ALIASES);
   const model = extractModel(query, brand);
   const detected = [sku, partType, brand, model, quality].filter(Boolean).length;
-  return { sku, partType, brand, model, quality, confidence: Math.min(detected / 3, 1) };
+  return { sku, partType, brand, model, quality, excludedPartTypes, confidence: Math.min(detected / 3, 1) };
 }
 
 export function isAltaProductQuery(query: string): boolean {
@@ -354,6 +387,9 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
     if (result.length) return sortProducts(result);
   }
 
+  if (cls.excludedPartTypes.length) {
+    result = result.filter((p) => !cls.excludedPartTypes.some((partType) => categoryMatches(p, partType)));
+  }
   if (cls.partType) result = result.filter((p) => categoryMatches(p, cls.partType as string));
   if (cls.brand) {
     const withBrand = result.filter((p) => detectProductBrand(p) === cls.brand || norm(productHaystack(p)).includes(norm(cls.brand)));
@@ -400,6 +436,10 @@ function looseProductFallback(products: MongoProduct[], query: string, cls: Alta
 
   return sortProducts(products.filter((product) => {
     if (product.price <= 0) return false;
+    if (cls.excludedPartTypes.some((partType) => categoryMatches(product, partType))) return false;
+    if (cls.partType && !categoryMatches(product, cls.partType)) return false;
+    if (cls.brand && detectProductBrand(product) !== cls.brand && !norm(productHaystack(product)).includes(norm(cls.brand))) return false;
+    if (cls.model && !modelMatches(product, cls.model)) return false;
     const haystack = norm(productHaystack(product));
     let score = 0;
     for (const token of tokens) {
@@ -552,7 +592,7 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
     const lines = groups.slice(0, 10).map((group, index) => {
       const product = group.products[0];
       const stock = product.available ? "Disponible" : "Sin stock";
-      return `${index + 1}. ${group.label} - ${formatARS(product)} - ${stock}`;
+      return `${index + 1}. ${group.label} - ${shortName(product, 42)} - ${formatARS(product)} - ${stock}`;
     });
     return {
       mode: "quality_menu",

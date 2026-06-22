@@ -104,6 +104,7 @@ function shouldProbeCatalogMetadata(text: string): boolean {
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  if (/^(hola|buenas|buen dia|buenas tardes|buenas noches)\s+(nova|bot|ia|alta)?$/.test(normalized)) return false;
   if (normalized.length < 4 && !/^\d{2,}$/.test(normalized)) return false;
   if (/^(hola|buenas|buen dia|buenas tardes|buenas noches|gracias|ok|dale|si|no)$/.test(normalized)) return false;
   return normalized.split(/\s+/).some((word) => word.length >= 4 || /\d/.test(word));
