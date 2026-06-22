@@ -20,6 +20,18 @@ type GlobalWithIO = {
   };
 };
 
+function waMessageIdFrom(response: unknown): string | null {
+  const messages = (response as { messages?: Array<{ id?: string }> } | null)?.messages;
+  return messages?.[0]?.id ?? null;
+}
+
+function sendErrorSummary(error: unknown): string {
+  const err = error as { code?: string; message?: string; response?: { status?: number; data?: unknown } };
+  const status = err.response?.status ? `status=${err.response.status}` : null;
+  const data = err.response?.data ? `data=${JSON.stringify(err.response.data).slice(0, 300)}` : null;
+  return [err.code, err.message, status, data].filter(Boolean).join(" | ") || "unknown";
+}
+
 const pendingAltaSelections = new Map<string, AltaQualityGroup[]>();
 const lastAltaQueryByConversation = new Map<string, string>();
 
@@ -343,8 +355,29 @@ export async function POST(req: NextRequest) {
     const body: WAWebhookBody = await req.json();
     if (body.object !== "whatsapp_business_account") return NextResponse.json({ status: "ignored" });
 
-    const parsed = parseIncomingWebhook(body);
     const waConfig = await getWAConfig() as Record<string, string> | null;
+    const expectedPhoneNumberId = waConfig?.phoneNumberId;
+    const eventPhoneNumberIds = new Set(
+      (body.entry ?? [])
+        .flatMap((entry) => entry.changes ?? [])
+        .map((change) => change.value?.metadata?.phone_number_id)
+        .filter(Boolean)
+    );
+
+    if (
+      expectedPhoneNumberId &&
+      eventPhoneNumberIds.size > 0 &&
+      !eventPhoneNumberIds.has(expectedPhoneNumberId)
+    ) {
+      console.warn(
+        `[WH] ignored phone_number_id mismatch expected=${expectedPhoneNumberId} got=${[
+          ...eventPhoneNumberIds,
+        ].join(",")}`
+      );
+      return NextResponse.json({ status: "ignored", reason: "phone_number_id_mismatch" });
+    }
+
+    const parsed = parseIncomingWebhook(body);
 
     for (const msg of parsed) {
       console.log(`[WH] ▶ from=${msg.from} type=${msg.type} text=${JSON.stringify(msg.text?.slice(0,80))}`);
@@ -830,13 +863,40 @@ export async function POST(req: NextRequest) {
             const cardButtons = product.available
               ? [{ id: `cart_add_${product.id}`, title: "Agregar" }, { id: "cart_view", title: "Ver carrito" }]
               : [{ id: "catalog_more", title: "Ver mas" }];
+            let waMessageId: string | null = null;
+            let deliveryMethod = "panel_only";
+            let deliveryError: string | null = null;
 
             if (waConfig?.phoneNumberId && waConfig?.accessToken) {
               const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
               try {
-                await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
-              } catch {
-                await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+                console.log(`[WH] sending product card image=${Boolean(product.image)} sku=${product.sku ?? ""} to=${contact.phone}`);
+                const res = await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
+                waMessageId = waMessageIdFrom(res);
+                deliveryMethod = product.image ? "card_image" : "card_buttons";
+                console.log(`[WH] product card sent OK method=${deliveryMethod} waMessageId=${waMessageId ?? ""}`);
+              } catch (imageError) {
+                deliveryError = sendErrorSummary(imageError);
+                console.warn(`[WH] product card image failed sku=${product.sku ?? ""}: ${deliveryError}`);
+                try {
+                  const res = await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+                  waMessageId = waMessageIdFrom(res);
+                  deliveryMethod = "card_buttons";
+                  console.log(`[WH] product card fallback sent OK waMessageId=${waMessageId ?? ""}`);
+                } catch (buttonError) {
+                  deliveryError = sendErrorSummary(buttonError);
+                  console.warn(`[WH] product card fallback failed sku=${product.sku ?? ""}: ${deliveryError}`);
+                  try {
+                    const res = await wa.sendTextMessage(contact.phone, caption);
+                    waMessageId = waMessageIdFrom(res);
+                    deliveryMethod = "text_fallback";
+                    console.log(`[WH] product text fallback sent OK waMessageId=${waMessageId ?? ""}`);
+                  } catch (textError) {
+                    deliveryError = sendErrorSummary(textError);
+                    deliveryMethod = "failed";
+                    console.error(`[WH] product text fallback failed sku=${product.sku ?? ""}: ${deliveryError}`);
+                  }
+                }
               }
             }
 
@@ -844,9 +904,17 @@ export async function POST(req: NextRequest) {
               conversationId: conversation.id,
               direction: "outbound",
               sender: "ai",
-              status: "sent",
+              status: deliveryMethod === "failed" ? "error" : "sent",
+              waMessageId,
               content: caption,
-              metadata: JSON.stringify({ headerImage: product.image ?? null, buttons: cardButtons, isProductSearch: true, altaBot: "direct" }),
+              metadata: JSON.stringify({
+                headerImage: product.image ?? null,
+                buttons: cardButtons,
+                isProductSearch: true,
+                altaBot: "direct",
+                deliveryMethod,
+                deliveryError,
+              }),
             });
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
             continue;

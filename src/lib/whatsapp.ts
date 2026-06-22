@@ -1,10 +1,21 @@
 import axios from "axios";
 
 const WA_API_BASE = "https://graph.facebook.com/v19.0";
+const WA_REQUEST_TIMEOUT_MS = 10000;
+
+function imageForWhatsAppHeader(imageUrl: string | null): string | null {
+  if (!imageUrl) return null;
+  if (/res\.cloudinary\.com\/.+\/image\/upload\//i.test(imageUrl)) {
+    return imageUrl.replace(/\/image\/upload\//i, "/image/upload/f_jpg,q_auto/");
+  }
+  if (/\.webp(?:[?#].*)?$/i.test(imageUrl)) return null;
+  return imageUrl;
+}
 
 export function getWAClient(phoneNumberId: string, accessToken: string) {
   const client = axios.create({
     baseURL: `${WA_API_BASE}/${phoneNumberId}`,
+    timeout: WA_REQUEST_TIMEOUT_MS,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
@@ -74,12 +85,13 @@ export function getWAClient(phoneNumberId: string, accessToken: string) {
       bodyText: string,
       buttons: { id: string; title: string }[]
     ) {
+      const headerImageUrl = imageForWhatsAppHeader(imageUrl);
       const safeButtons = buttons.slice(0, 3).map((b) => ({
         type: "reply",
         reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
       }));
 
-      if (imageUrl) {
+      if (headerImageUrl) {
         const res = await client.post("/messages", {
           messaging_product: "whatsapp",
           recipient_type: "individual",
@@ -87,7 +99,7 @@ export function getWAClient(phoneNumberId: string, accessToken: string) {
           type: "interactive",
           interactive: {
             type: "button",
-            header: { type: "image", image: { link: imageUrl } },
+            header: { type: "image", image: { link: headerImageUrl } },
             body: { text: bodyText.slice(0, 1024) },
             action: { buttons: safeButtons },
           },
