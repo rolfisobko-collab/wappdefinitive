@@ -1,10 +1,12 @@
 import type { MongoProduct } from "@/lib/mongodb";
+import { colorLabel, colorMatchesText, detectProductColor, uniqueColors } from "@/lib/productColors";
 
 export type AltaClassification = {
   sku: string | null;
   partType: string | null;
   brand: string | null;
   model: string | null;
+  color: string | null;
   quality: string | null;
   excludedPartTypes: string[];
   confidence: number;
@@ -160,6 +162,7 @@ const PRODUCT_WORDS = [
   ...Object.values(BRAND_ALIASES).flat(),
   "precio", "stock", "tenes", "tienen", "busco", "necesito", "quiero", "repuesto",
   "repuestos", "modelo", "calidad", "calidades", "unidad", "unidades",
+  "color", "colores",
 ];
 
 const IPHONE_MODELS = [
@@ -282,6 +285,7 @@ function productHaystack(product: MongoProduct): string {
     product.partBrand,
     product.deviceBrand,
     product.deviceModel,
+    product.color,
     product.tags,
     product.context,
     product.categoryTags,
@@ -376,8 +380,9 @@ export function classifyAltaQuery(query: string): AltaClassification {
   const brand = extractBrand(query);
   const quality = findAlias(text, QUALITY_ALIASES);
   const model = extractModel(query, brand);
-  const detected = [sku, partType, brand, model, quality].filter(Boolean).length;
-  return { sku, partType, brand, model, quality, excludedPartTypes, confidence: Math.min(detected / 3, 1) };
+  const color = detectProductColor(query);
+  const detected = [sku, partType, brand, model, color, quality].filter(Boolean).length;
+  return { sku, partType, brand, model, color, quality, excludedPartTypes, confidence: Math.min(detected / 3, 1) };
 }
 
 export function isAltaProductQuery(query: string): boolean {
@@ -416,6 +421,7 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
     const withModel = result.filter((p) => modelMatches(p, cls.model as string));
     if (withModel.length > 0 || !cls.partType || !GENERIC_ACCESSORY_PARTS.has(cls.partType)) result = withModel;
   }
+  if (cls.color) result = result.filter((p) => productColorMatches(p, cls.color));
   if (cls.quality) {
     const withQuality = result.filter((p) => detectProductQuality(p) === cls.quality || norm(productHaystack(p)).includes(norm(cls.quality)));
     if (withQuality.length > 0) result = withQuality;
@@ -431,8 +437,17 @@ function matchesRequestedProduct(product: MongoProduct, cls: AltaClassification)
   if (cls.partType && !requestedPartMatches(product, cls.partType)) return false;
   if (cls.brand && detectProductBrand(product) !== cls.brand && !norm(productHaystack(product)).includes(norm(cls.brand))) return false;
   if (cls.model && !modelMatches(product, cls.model)) return false;
+  if (cls.color && !productColorMatches(product, cls.color)) return false;
   if (cls.quality && detectProductQuality(product) !== cls.quality && !norm(productHaystack(product)).includes(norm(cls.quality))) return false;
   return true;
+}
+
+function productColor(product: MongoProduct): string | null {
+  return product.color ?? detectProductColor(product.name);
+}
+
+function productColorMatches(product: MongoProduct, color: string): boolean {
+  return productColor(product) === color || colorMatchesText(product.name, color) || colorMatchesText(product.tags.join(" "), color);
 }
 
 const QUERY_SYNONYMS: Record<string, string[]> = {
@@ -468,6 +483,7 @@ function looseProductFallback(products: MongoProduct[], query: string, cls: Alta
     if (cls.partType && !categoryMatches(product, cls.partType)) return false;
     if (cls.brand && detectProductBrand(product) !== cls.brand && !norm(productHaystack(product)).includes(norm(cls.brand))) return false;
     if (cls.model && !modelMatches(product, cls.model)) return false;
+    if (cls.color && !productColorMatches(product, cls.color)) return false;
     const haystack = norm(productHaystack(product));
     let score = 0;
     for (const token of tokens) {
@@ -546,6 +562,29 @@ function groupByProduct(products: MongoProduct[]): AltaQualityGroup[] {
   }));
 }
 
+function groupByColor(products: MongoProduct[]): AltaQualityGroup[] {
+  const map = new Map<string, MongoProduct[]>();
+  for (const product of products) {
+    const color = productColor(product) ?? "sin color";
+    map.set(color, [...(map.get(color) ?? []), product]);
+  }
+  return Array.from(map.entries())
+    .map(([color, colorProducts]) => ({
+      label: color === "sin color" ? "Sin color" : colorLabel(color),
+      replacementBrand: null,
+      quality: null,
+      technology: null,
+      variant: color,
+      products: sortProducts(colorProducts),
+    }))
+    .sort((a, b) => {
+      const aHasStock = a.products.some((product) => product.available);
+      const bHasStock = b.products.some((product) => product.available);
+      if (aHasStock !== bHasStock) return aHasStock ? -1 : 1;
+      return a.label.localeCompare(b.label);
+    });
+}
+
 function labelForSearch(cls: AltaClassification): string {
   return [cls.partType, cls.brand, cls.model].filter(Boolean).join(" ") || "producto";
 }
@@ -575,6 +614,7 @@ export function buildAltaProductCaption(product: MongoProduct): string {
     `*${product.name}*`,
     product.sku ? `SKU: ${product.sku}` : null,
     product.category ? `Categoria: ${product.category}` : null,
+    productColor(product) ? `Color: ${colorLabel(productColor(product))}` : null,
     `Precio: ${price}`,
     product.available ? "Disponible" : "Sin stock",
   ].filter(Boolean).join("\n");
@@ -609,6 +649,18 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
   const searchLabel = labelForSearch(cls);
 
   if (!all.length) {
+    if (cls.color) {
+      const withoutColor = { ...cls, color: null };
+      const sameProduct = filterProducts(products, withoutColor).filter((product) => matchesRequestedProduct(product, withoutColor));
+      const colors = uniqueColors(sameProduct.map(productColor));
+      if (colors.length) {
+        return {
+          mode: "not_found",
+          classification: cls,
+          text: `No encontre ${searchLabel} ${colorLabel(cls.color).toLowerCase()} en el catalogo. Colores disponibles: ${colors.map(colorLabel).join(", ")}.`,
+        };
+      }
+    }
     return {
       mode: "not_found",
       classification: cls,
@@ -616,9 +668,23 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
     };
   }
 
-  const groups = cls.partType && PRODUCT_MENU_PARTS.has(cls.partType)
-    ? groupByProduct(all)
-    : groupByQuality(all);
+  if (cls.model && !cls.brand) {
+    const brands = Array.from(new Set(all.map(detectProductBrand).filter(Boolean)));
+    if (brands.length > 1) {
+      return {
+        mode: "clarify",
+        classification: cls,
+        text: `Tengo ${cls.model} en varias marcas (${brands.join(", ")}). Decime la marca exacta para pasarte solo ese producto.`,
+      };
+    }
+  }
+
+  const colorGroups = cls.partType === "TAPA" && !cls.color ? groupByColor(all).filter((group) => group.variant !== "sin color") : [];
+  const groups = colorGroups.length > 1
+    ? colorGroups
+    : cls.partType && PRODUCT_MENU_PARTS.has(cls.partType)
+      ? groupByProduct(all)
+      : groupByQuality(all);
   if (groups.length > 1) {
     const lines = groups.slice(0, 10).map((group, index) => {
       const product = group.products[0];

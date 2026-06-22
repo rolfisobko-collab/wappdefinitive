@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { MongoProduct } from "@/lib/mongodb";
-import { Search, Package, RefreshCw, Tag, CheckCircle, XCircle, Zap, ShoppingBag, Filter } from "lucide-react";
+import { Search, Package, RefreshCw, Tag, CheckCircle, XCircle, Zap, ShoppingBag, Filter, Palette } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/Toast";
 
@@ -16,6 +16,15 @@ interface ProductsData {
 
 function formatARS(n: number) {
   return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
+}
+
+const COLOR_OPTIONS = [
+  "", "blanco", "negro", "rojo", "azul", "celeste", "rosa", "dorado",
+  "lila", "verde", "gris", "amarillo", "naranja", "plateado", "grafito", "beige",
+];
+
+function colorLabel(color?: string | null) {
+  return color ? color.charAt(0).toUpperCase() + color.slice(1) : "Sin color";
 }
 
 export function ProductsPanel() {
@@ -186,6 +195,7 @@ export function ProductsPanel() {
                 product={product}
                 expanded={expanded === product.id}
                 onToggle={() => setExpanded(expanded === product.id ? null : product.id)}
+                onSaved={load}
               />
             ))}
           </div>
@@ -199,8 +209,29 @@ function ProductCard({ product, expanded, onToggle }: {
   product: MongoProduct;
   expanded: boolean;
   onToggle: () => void;
+  onSaved: () => void;
 }) {
   const hasPromo = !!product.promoPriceARS && product.promoPriceARS < product.priceARS;
+  const [savingColor, setSavingColor] = useState(false);
+  const { toast } = useToast();
+
+  async function saveColor(color: string) {
+    setSavingColor(true);
+    try {
+      const res = await fetch(`/api/mongo-products/${encodeURIComponent(product.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ color }),
+      });
+      if (!res.ok) throw new Error();
+      onSaved();
+      toast("Color actualizado", "success");
+    } catch {
+      toast("No se pudo guardar el color", "error");
+    } finally {
+      setSavingColor(false);
+    }
+  }
 
   return (
     <div
@@ -235,6 +266,11 @@ function ProductCard({ product, expanded, onToggle }: {
           {product.liquidation && (
             <span className="bg-[#f59e0b] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
               LIQUI
+            </span>
+          )}
+          {product.color && (
+            <span className="bg-white/90 text-[#111b21] text-[10px] font-bold px-2 py-0.5 rounded-full border border-[#e9edef]">
+              {colorLabel(product.color)}
             </span>
           )}
         </div>
@@ -306,6 +342,30 @@ function ProductCard({ product, expanded, onToggle }: {
                   📍 {product.location}
                 </span>
               )}
+              {product.color && (
+                <span className="text-[10px] text-[#008069] bg-green-50 px-2 py-0.5 rounded-full border border-green-100">
+                  Color: {colorLabel(product.color)}
+                </span>
+              )}
+            </div>
+            <div className="pt-2">
+              <label className="flex items-center gap-1 text-[10px] text-[#667781] font-semibold mb-1">
+                <Palette className="w-3 h-3" />
+                Color del producto
+              </label>
+              <select
+                value={product.color ?? ""}
+                disabled={savingColor}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => saveColor(event.target.value)}
+                className="w-full rounded-lg bg-[#f0f2f5] border border-transparent px-2 py-1.5 text-xs text-[#111b21] outline-none focus:border-[#008069] focus:bg-white"
+              >
+                {COLOR_OPTIONS.map((color) => (
+                  <option key={color || "none"} value={color}>
+                    {colorLabel(color)}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         )}

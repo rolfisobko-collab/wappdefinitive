@@ -109,13 +109,14 @@ function isProductQuery(text: string): boolean {
 
 const PRODUCT_FOLLOWUP_RE = /\b(modelo|valor|precio|sale|cuesta|stock|disponible|disponibilidad|calidad|calidades|ese|esa|este|esta|primero|primera|segundo|segunda|opcion|opciones|sku|codigo|cod)\b|#?\b\d{3,6}\b/i;
 const CATALOG_AFFIRMATIVE_FOLLOWUP_RE = /\b(si|s[ií]|dale|ok|okay|mostrame|mostrar|muestrame|mandame|pasame|ver|quiero|alternativas|opciones)\b/i;
+const COLOR_FOLLOWUP_RE = /\b(color|colores|blanco|blanca|negro|negra|rojo|roja|azul|celeste|rosa|rosado|rosada|dorado|dorada|lila|violeta|purpura|púrpura|verde|gris|amarillo|amarilla|naranja|plateado|plateada|grafito|beige)\b/i;
 
 function isCatalogLikeMessage(text: string): boolean {
   return isProductQuery(text) || isAltaProductQuery(text) || PRODUCT_FOLLOWUP_RE.test(text);
 }
 
 function isCatalogFollowUp(text: string): boolean {
-  return (PRODUCT_FOLLOWUP_RE.test(text) || CATALOG_AFFIRMATIVE_FOLLOWUP_RE.test(text)) && !isProductQuery(text) && !isAltaProductQuery(text);
+  return (PRODUCT_FOLLOWUP_RE.test(text) || CATALOG_AFFIRMATIVE_FOLLOWUP_RE.test(text) || COLOR_FOLLOWUP_RE.test(text)) && !isProductQuery(text) && !isAltaProductQuery(text);
 }
 
 function shouldProbeCatalogMetadata(text: string): boolean {
@@ -146,6 +147,47 @@ function recentCatalogQuery(messages: Array<Record<string, unknown>>, currentTex
     if (isProductQuery(content) || isAltaProductQuery(content)) return content;
   }
   return null;
+}
+
+async function resolveAltaPickFromHistory(
+  pickValue: string,
+  pickTitle: string,
+  messages: Array<Record<string, unknown>>
+): Promise<MongoProduct | null> {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.direction !== "outbound" || !m.metadata) continue;
+    try {
+      const meta = JSON.parse(String(m.metadata)) as {
+        altaBot?: string;
+        selectionMap?: Record<string, string>;
+        selectionTitles?: Record<string, string>;
+      };
+      const mappedId = meta.selectionMap?.[pickValue];
+      if (mappedId) {
+        const product = await getMongoProductById(mappedId);
+        if (product) return product;
+      }
+      const mappedByTitle = Object.entries(meta.selectionTitles ?? {})
+        .find(([, title]) => title.toLowerCase() === pickTitle.toLowerCase())?.[0];
+      if (mappedByTitle) {
+        const productId = meta.selectionMap?.[mappedByTitle];
+        if (productId) {
+          const product = await getMongoProductById(productId);
+          if (product) return product;
+        }
+      }
+    } catch { /* ignore malformed metadata */ }
+  }
+
+  const remembered = recentCatalogQuery(messages, pickTitle);
+  if (!remembered || !pickTitle) return null;
+  const result = await getMongoProducts({ search: `${remembered} ${pickTitle}`, limit: 20, onlyAvailable: false });
+  const tokens = pickTitle.toLowerCase().split(/\s+/).filter((token) => token.length > 1);
+  return result.products.find((product) => {
+    const name = product.name.toLowerCase();
+    return tokens.every((token) => name.includes(token));
+  }) ?? result.products[0] ?? null;
 }
 
 // ─── AI history builder (excludes product-search exchanges) ─────────────────
@@ -469,18 +511,34 @@ export async function POST(req: NextRequest) {
           const idx = Number(pickValue);
           const groups = pendingAltaSelections.get(conversation.id) ?? [];
           const group = Number.isFinite(idx) ? groups[idx] : null;
-          const product = group?.products[0] ?? await getMongoProductById(pickValue);
+          const product = group?.products[0]
+            ?? await getMongoProductById(pickValue)
+            ?? await resolveAltaPickFromHistory(pickValue, msg.interactivePayload.title, (conversation as Record<string, unknown>).messages as Array<Record<string, unknown>> ?? []);
 
           if (product) {
             const caption = buildAltaProductCaption(product);
             const cardButtons = product.available
               ? [{ id: `cart_add_${product.id}`, title: "Agregar" }, { id: "cart_view", title: "Ver carrito" }]
               : [{ id: "catalog_more", title: "Ver mas" }];
-
+            let waMessageId: string | null = null;
+            let deliveryMethod = "panel_only";
+            let deliveryError: string | null = null;
             try {
-              await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
-            } catch {
-              await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+              const res = await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
+              waMessageId = waMessageIdFrom(res);
+              deliveryMethod = product.image ? "card_image" : "card_buttons";
+            } catch (imageError) {
+              deliveryError = sendErrorSummary(imageError);
+              try {
+                const res = await wa.sendProductCard(contact.phone, null, caption, cardButtons);
+                waMessageId = waMessageIdFrom(res);
+                deliveryMethod = "card_buttons";
+              } catch (buttonError) {
+                deliveryError = sendErrorSummary(buttonError);
+                const res = await wa.sendTextMessage(contact.phone, caption);
+                waMessageId = waMessageIdFrom(res);
+                deliveryMethod = "text_fallback";
+              }
             }
 
             const cardMsg = await createMessage({
@@ -488,12 +546,32 @@ export async function POST(req: NextRequest) {
               direction: "outbound",
               sender: "ai",
               status: "sent",
+              waMessageId,
               content: caption,
-              metadata: JSON.stringify({ headerImage: product.image ?? null, buttons: cardButtons, isProductSearch: true }),
+              metadata: JSON.stringify({
+                productId: product.id,
+                headerImage: product.image ?? null,
+                buttons: cardButtons,
+                isProductSearch: true,
+                altaBot: "pick",
+                deliveryMethod,
+                deliveryError,
+              }),
             });
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
           } else {
-            await wa.sendTextMessage(contact.phone, "No encontre esa opcion. Escribime de nuevo el producto y te muestro las calidades.");
+            const text = "No encontre esa opcion. Escribime de nuevo el producto y te muestro las calidades.";
+            const res = await wa.sendTextMessage(contact.phone, text);
+            const outMsg = await createMessage({
+              conversationId: conversation.id,
+              direction: "outbound",
+              sender: "ai",
+              status: "sent",
+              waMessageId: waMessageIdFrom(res),
+              content: text,
+              metadata: JSON.stringify({ isProductSearch: true, altaBot: "pick_not_found", pickValue, pickTitle: msg.interactivePayload.title }),
+            });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
           }
           continue;
         }
@@ -837,13 +915,25 @@ export async function POST(req: NextRequest) {
           if (altaReply.mode === "quality_menu") {
             lastAltaQueryByConversation.set(conversation.id, altaQuery);
             pendingAltaSelections.set(conversation.id, altaReply.groups);
+            const selectionMap = Object.fromEntries(
+              altaReply.groups.map((group) => {
+                const product = group.products[0];
+                return [product.id, product.id];
+              })
+            );
+            const selectionTitles = Object.fromEntries(
+              altaReply.groups.map((group) => {
+                const product = group.products[0];
+                return [product.id, group.label.slice(0, 24)];
+              })
+            );
             const outMsg = await createMessage({
               conversationId: conversation.id,
               direction: "outbound",
               sender: "ai",
               status: "sent",
               content: altaReply.text,
-              metadata: JSON.stringify({ isProductSearch: true, altaBot: "quality_menu" }),
+              metadata: JSON.stringify({ isProductSearch: true, altaBot: "quality_menu", selectionMap, selectionTitles }),
             });
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
 
@@ -923,6 +1013,7 @@ export async function POST(req: NextRequest) {
               waMessageId,
               content: caption,
               metadata: JSON.stringify({
+                productId: product.id,
                 headerImage: product.image ?? null,
                 buttons: cardButtons,
                 isProductSearch: true,

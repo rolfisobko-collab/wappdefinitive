@@ -1,4 +1,5 @@
 import { MongoClient, Db } from "mongodb";
+import { detectProductColor, normalizeProductColor } from "@/lib/productColors";
 
 const _uri = "mongodb://leandrosobko_db_user:39kokOttcCd8gZn1@ac-7pyfrbt-shard-00-00.qkjc22r.mongodb.net:27017,ac-7pyfrbt-shard-00-01.qkjc22r.mongodb.net:27017,ac-7pyfrbt-shard-00-02.qkjc22r.mongodb.net:27017/test?ssl=true&authSource=admin&retryWrites=true&w=majority";
 const DB_NAME = "test";
@@ -351,6 +352,7 @@ export interface MongoProduct {
   partBrand: string;
   deviceBrand: string;
   deviceModel: string;
+  color: string | null;
   tags: string[];
   context: string;
   categoryTags: string[];
@@ -423,6 +425,7 @@ export async function getMongoProductById(id: string): Promise<MongoProduct | nu
   const partBrand = (p.partBrand as string) || legacyBrand;
   const deviceBrand = (p.deviceBrand as string) || "";
   const deviceModel = (p.deviceModel as string) || "";
+  const color = normalizeProductColor(p.color ?? p.variantColor) ?? detectProductColor(p.name);
   return {
     id: p._id as string,
     name: p.name as string,
@@ -443,13 +446,14 @@ export async function getMongoProductById(id: string): Promise<MongoProduct | nu
     partBrand,
     deviceBrand,
     deviceModel,
+    color,
     tags: productTags,
     context,
     categoryTags,
     categoryContext,
     searchText: productSearchText([
       p.name, p.sku, p.description, p.markdownDescription, categoryName,
-      p.brand, partBrand, deviceBrand, deviceModel,
+      p.brand, partBrand, deviceBrand, deviceModel, color,
       productTags, context, categoryTags, categoryContext,
     ]),
   };
@@ -624,6 +628,7 @@ export async function getMongoProducts(opts: {
     const partBrand = (p.partBrand as string) || legacyBrand;
     const deviceBrand = (p.deviceBrand as string) || "";
     const deviceModel = (p.deviceModel as string) || "";
+    const color = normalizeProductColor(p.color ?? p.variantColor) ?? detectProductColor(p.name);
     return {
       id: p._id as string,
       name: p.name as string,
@@ -647,13 +652,14 @@ export async function getMongoProducts(opts: {
       partBrand,
       deviceBrand,
       deviceModel,
+      color,
       tags: productTags,
       context,
       categoryTags,
       categoryContext,
       searchText: productSearchText([
         p.name, p.sku, p.description, p.markdownDescription, categoryName,
-        p.brand, partBrand, deviceBrand, deviceModel,
+        p.brand, partBrand, deviceBrand, deviceModel, color,
         productTags, context, categoryTags, categoryContext,
       ]),
     };
