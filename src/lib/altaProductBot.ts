@@ -498,6 +498,9 @@ function groupByQuality(products: MongoProduct[]): AltaQualityGroup[] {
   return Array.from(map.values())
     .map(({ meta, products }) => ({ ...meta, products: sortProducts(products) }))
     .sort((a, b) => {
+      const aHasStock = a.products.some((product) => product.available);
+      const bHasStock = b.products.some((product) => product.available);
+      if (aHasStock !== bHasStock) return aHasStock ? -1 : 1;
       const ai = QUALITY_ORDER.findIndex((quality) => a.label.includes(quality));
       const bi = QUALITY_ORDER.findIndex((quality) => b.label.includes(quality));
       return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
@@ -574,7 +577,6 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
   const metadataMatches = metadataExactMatches(products, query, forceSearch);
   let all = metadataMatches.length ? metadataMatches : filterProducts(products, cls);
   if (!all.length) all = looseProductFallback(products, query, cls);
-  const available = all.filter((p) => p.available);
   const searchLabel = labelForSearch(cls);
 
   if (!all.length) {
@@ -599,14 +601,6 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
       classification: cls,
       groups: groups.slice(0, 10),
       text: `Tengo estas opciones para ${searchLabel}:\n\n${lines.join("\n")}\n\nElegi marca/calidad y te paso la ficha para agregar al carrito.`,
-    };
-  }
-
-  if (!available.length) {
-    return {
-      mode: "not_found",
-      classification: cls,
-      text: `Encontre ${searchLabel}, pero ahora figura sin stock. Si queres te muestro alternativas cercanas.`,
     };
   }
 

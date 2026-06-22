@@ -32,6 +32,15 @@ function sendErrorSummary(error: unknown): string {
   return [err.code, err.message, status, data].filter(Boolean).join(" | ") || "unknown";
 }
 
+function mergeProducts(...groups: MongoProduct[][]): MongoProduct[] {
+  const seen = new Set<string>();
+  return groups.flat().filter((product) => {
+    if (seen.has(product.id)) return false;
+    seen.add(product.id);
+    return true;
+  });
+}
+
 const pendingAltaSelections = new Map<string, AltaQualityGroup[]>();
 const lastAltaQueryByConversation = new Map<string, string>();
 
@@ -99,13 +108,14 @@ function isProductQuery(text: string): boolean {
 }
 
 const PRODUCT_FOLLOWUP_RE = /\b(modelo|valor|precio|sale|cuesta|stock|disponible|disponibilidad|calidad|calidades|ese|esa|este|esta|primero|primera|segundo|segunda|opcion|opciones|sku|codigo|cod)\b|#?\b\d{3,6}\b/i;
+const CATALOG_AFFIRMATIVE_FOLLOWUP_RE = /\b(si|s[ií]|dale|ok|okay|mostrame|mostrar|muestrame|mandame|pasame|ver|quiero|alternativas|opciones)\b/i;
 
 function isCatalogLikeMessage(text: string): boolean {
   return isProductQuery(text) || isAltaProductQuery(text) || PRODUCT_FOLLOWUP_RE.test(text);
 }
 
 function isCatalogFollowUp(text: string): boolean {
-  return PRODUCT_FOLLOWUP_RE.test(text) && !isProductQuery(text) && !isAltaProductQuery(text);
+  return (PRODUCT_FOLLOWUP_RE.test(text) || CATALOG_AFFIRMATIVE_FOLLOWUP_RE.test(text)) && !isProductQuery(text) && !isAltaProductQuery(text);
 }
 
 function shouldProbeCatalogMetadata(text: string): boolean {
@@ -763,20 +773,25 @@ export async function POST(req: NextRequest) {
 
       const rawMsgs = (freshConv.messages as Array<Record<string, unknown>>) ?? [];
       const rememberedQuery = lastAltaQueryByConversation.get(conversation.id) ?? recentCatalogQuery(rawMsgs, textForSearch);
+      const isRememberedFollowUp = Boolean(rememberedQuery) && isCatalogFollowUp(textForSearch);
       let metadataCatalogHit = false;
       if (!isCatalogLikeMessage(textForSearch) && shouldProbeCatalogMetadata(textForSearch)) {
         const probe = await getMongoProducts({ search: textForSearch, limit: 1, onlyAvailable: false });
         metadataCatalogHit = probe.products.length > 0;
       }
-      const forceCatalogBot = isCatalogLikeMessage(textForSearch) || metadataCatalogHit || (Boolean(rememberedQuery) && isCatalogFollowUp(textForSearch));
-      const altaQuery = (rememberedQuery && isCatalogFollowUp(textForSearch))
-        ? `${rememberedQuery} ${textForSearch}`
+      const forceCatalogBot = isCatalogLikeMessage(textForSearch) || metadataCatalogHit || isRememberedFollowUp;
+      const altaQuery = isRememberedFollowUp
+        ? rememberedQuery as string
         : textForSearch;
 
       // Alta deterministic product bot. Product/price/stock messages never fall through to free AI.
       try {
         if (forceCatalogBot) {
-          const { products } = await getMongoProducts({ limit: 5000, onlyAvailable: false });
+          const [catalogResult, queryResult] = await Promise.all([
+            getMongoProducts({ limit: 5000, onlyAvailable: false }),
+            getMongoProducts({ search: altaQuery, limit: 150, onlyAvailable: false }),
+          ]);
+          const products = mergeProducts(queryResult.products, catalogResult.products);
           const altaReply = buildAltaProductBotReply(products, altaQuery, metadataCatalogHit);
 
           pendingAltaSelections.delete(conversation.id);
