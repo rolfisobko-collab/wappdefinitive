@@ -221,8 +221,10 @@ function stripNegatedPartAliases(text: string): string {
 }
 
 function extractSku(raw: string): string | null {
-  const m = raw.match(/(?:c[oó]d(?:igo)?\.?\s*#?\s*)?\b([A-Z]{1,6}\.?\d{2,6}|\d{3,6})\b/i);
-  return m ? m[1].toUpperCase() : null;
+  const prefixed = raw.match(/\bc[oó]d(?:igo)?\.?\s*#?\s*([A-Z]{1,6}\.?\d{2,6}|\d{3,6})\b/i);
+  if (prefixed) return prefixed[1].toUpperCase();
+  const numeric = raw.match(/\b(\d{3,6})\b/i);
+  return numeric ? numeric[1] : null;
 }
 
 function extractBrand(raw: string): string | null {
@@ -251,7 +253,7 @@ function extractModel(raw: string, brand: string | null): string | null {
   }
 
   if (brand === "MOTOROLA") {
-    const model = clean.match(/\b(?:MOTO\s+)?((?:EDGE\s*)?\d{1,3}\s*(?:NEO|FUSION|PRO|ULTRA|LITE)?|[GES]\s*\d{1,3}[A-Z]?\s*(?:PLAY|PLUS|POWER|LITE|PRO|ULTRA|EDGE|STYLUS)?)\b/);
+    const model = clean.match(/\b(?:MOTO\s+)?([GES]\s*\d{1,3}[A-Z]?\s*(?:PLAY|PLUS|POWER|LITE|PRO|ULTRA|EDGE|STYLUS)?|(?:EDGE\s*)?\d{1,3}\s*(?:NEO|FUSION|PRO|ULTRA|LITE)?)\b/);
     if (model) return model[1].replace(/\s+/g, " ").trim();
   }
 
@@ -322,6 +324,19 @@ function categoryMatches(product: MongoProduct, partType: string): boolean {
   return targets.some((target) => category.includes(norm(target))) ||
     targets.some((target) => wordIncludes(partText, norm(target)) || partText.includes(norm(target))) ||
     (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(partText, norm(alias)) || partText.includes(norm(alias)));
+}
+
+function requestedPartMatches(product: MongoProduct, partType: string): boolean {
+  const category = norm(product.category);
+  const productText = norm([
+    product.name,
+    product.category,
+    product.tags,
+  ].flat().filter(Boolean).join(" "));
+  const targets = CATEGORY_MATCH[partType] ?? [partType];
+  return targets.some((target) => category.includes(norm(target))) ||
+    targets.some((target) => wordIncludes(productText, norm(target)) || productText.includes(norm(target))) ||
+    (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(productText, norm(alias)) || productText.includes(norm(alias)));
 }
 
 function modelMatches(product: MongoProduct, model: string): boolean {
@@ -407,6 +422,17 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
   }
 
   return sortProducts(result);
+}
+
+function matchesRequestedProduct(product: MongoProduct, cls: AltaClassification): boolean {
+  if (product.price <= 0) return false;
+  if (cls.sku) return String(product.sku ?? "").toUpperCase().includes(cls.sku);
+  if (cls.excludedPartTypes.some((partType) => categoryMatches(product, partType))) return false;
+  if (cls.partType && !requestedPartMatches(product, cls.partType)) return false;
+  if (cls.brand && detectProductBrand(product) !== cls.brand && !norm(productHaystack(product)).includes(norm(cls.brand))) return false;
+  if (cls.model && !modelMatches(product, cls.model)) return false;
+  if (cls.quality && detectProductQuality(product) !== cls.quality && !norm(productHaystack(product)).includes(norm(cls.quality))) return false;
+  return true;
 }
 
 const QUERY_SYNONYMS: Record<string, string[]> = {
@@ -578,7 +604,8 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
 
   const metadataMatches = metadataExactMatches(products, query, forceSearch);
   let all = metadataMatches.length ? metadataMatches : filterProducts(products, cls);
-  if (!all.length) all = looseProductFallback(products, query, cls);
+  all = all.filter((product) => matchesRequestedProduct(product, cls));
+  if (!all.length) all = looseProductFallback(products, query, cls).filter((product) => matchesRequestedProduct(product, cls));
   const searchLabel = labelForSearch(cls);
 
   if (!all.length) {
