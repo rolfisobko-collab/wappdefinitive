@@ -318,31 +318,60 @@ function detectReplacementMeta(product: MongoProduct) {
   return { label, replacementBrand, quality, technology, variant };
 }
 
+function productMetadataText(product: MongoProduct): string {
+  return norm([
+    product.tags,
+    product.context,
+    product.categoryTags,
+    product.categoryContext,
+  ].flat().filter(Boolean).join(" "));
+}
+
+function partSignals(partType: string): string[] {
+  return [
+    ...(CATEGORY_MATCH[partType] ?? [partType]),
+    ...(PART_ALIASES[partType] ?? []),
+  ].map(norm).filter(Boolean);
+}
+
+function textMatchesAnySignal(text: string, signals: string[]): boolean {
+  return signals.some((signal) => wordIncludes(text, signal) || text.includes(signal));
+}
+
 function categoryMatches(product: MongoProduct, partType: string): boolean {
   const category = norm(product.category);
+  const metadata = productMetadataText(product);
   const partText = norm([
     product.name,
     product.category,
     product.tags,
     product.categoryTags,
+    product.context,
+    product.categoryContext,
   ].flat().filter(Boolean).join(" "));
-  const targets = CATEGORY_MATCH[partType] ?? [partType];
-  return targets.some((target) => category.includes(norm(target))) ||
-    targets.some((target) => wordIncludes(partText, norm(target)) || partText.includes(norm(target))) ||
-    (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(partText, norm(alias)) || partText.includes(norm(alias)));
+  const targets = (CATEGORY_MATCH[partType] ?? [partType]).map(norm);
+  const signals = partSignals(partType);
+  return targets.some((target) => category.includes(target)) ||
+    textMatchesAnySignal(metadata, signals) ||
+    textMatchesAnySignal(partText, signals);
 }
 
 function requestedPartMatches(product: MongoProduct, partType: string): boolean {
   const category = norm(product.category);
+  const metadata = productMetadataText(product);
   const productText = norm([
     product.name,
     product.category,
     product.tags,
+    product.context,
+    product.categoryTags,
+    product.categoryContext,
   ].flat().filter(Boolean).join(" "));
-  const targets = CATEGORY_MATCH[partType] ?? [partType];
-  return targets.some((target) => category.includes(norm(target))) ||
-    targets.some((target) => wordIncludes(productText, norm(target)) || productText.includes(norm(target))) ||
-    (PART_ALIASES[partType] ?? []).some((alias) => wordIncludes(productText, norm(alias)) || productText.includes(norm(alias)));
+  const targets = (CATEGORY_MATCH[partType] ?? [partType]).map(norm);
+  const signals = partSignals(partType);
+  return targets.some((target) => category.includes(target)) ||
+    textMatchesAnySignal(metadata, signals) ||
+    textMatchesAnySignal(productText, signals);
 }
 
 function modelMatches(product: MongoProduct, model: string): boolean {
@@ -475,6 +504,12 @@ function expandedQueryTokens(query: string): string[] {
   return Array.from(expanded);
 }
 
+function tagMatchesQuery(tag: string, queryText: string, tokens: string[]): boolean {
+  const normalizedTag = norm(tag);
+  if (!normalizedTag) return false;
+  return tokens.includes(normalizedTag) || wordIncludes(queryText, normalizedTag);
+}
+
 function looseProductFallback(products: MongoProduct[], query: string, cls: AltaClassification): MongoProduct[] {
   const tokens = expandedQueryTokens(query).filter((token) => !["cod", "codigo", "para"].includes(token));
   if (!tokens.length) return [];
@@ -501,13 +536,20 @@ function looseProductFallback(products: MongoProduct[], query: string, cls: Alta
 function metadataExactMatches(products: MongoProduct[], query: string, includeContext = true): MongoProduct[] {
   const tokens = expandedQueryTokens(query).filter((token) => !["cod", "codigo", "para"].includes(token));
   if (!tokens.length) return [];
+  const queryText = ` ${norm(query)} `;
 
-  const exactTagMatches = sortProducts(products.filter((product) => {
+  const exactProductTagMatches = sortProducts(products.filter((product) => {
     if (product.price <= 0) return false;
-    const tags = (product.tags ?? []).map((tag) => norm(tag));
-    return tokens.every((token) => tags.includes(token));
+    return (product.tags ?? []).some((tag) => tagMatchesQuery(tag, queryText, tokens));
   }));
+
+  const exactCategoryTagMatches = sortProducts(products.filter((product) => {
+    if (product.price <= 0) return false;
+    return (product.categoryTags ?? []).some((tag) => tagMatchesQuery(tag, queryText, tokens));
+  }));
+  const exactTagMatches = sortProducts(uniqueProducts([...exactProductTagMatches, ...exactCategoryTagMatches]));
   if (exactTagMatches.length) return exactTagMatches;
+
   if (!includeContext) return [];
 
   return sortProducts(products.filter((product) => {
