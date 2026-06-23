@@ -14,6 +14,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       updates.color = normalizeProductColor(body.color) ?? "";
     }
 
+    if ("imageUrl" in body) {
+      const imageUrl = typeof body.imageUrl === "string" ? body.imageUrl.trim() : "";
+      if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) {
+        return NextResponse.json({ error: "URL de imagen invalida" }, { status: 400 });
+      }
+      updates.image1 = imageUrl;
+      updates.images = [imageUrl];
+    }
+
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "Sin cambios" }, { status: 400 });
     }

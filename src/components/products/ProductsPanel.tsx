@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { MongoProduct } from "@/lib/mongodb";
-import { Search, Package, RefreshCw, Tag, CheckCircle, XCircle, Zap, ShoppingBag, Filter, Palette } from "lucide-react";
+import { Search, Package, RefreshCw, Tag, CheckCircle, XCircle, Zap, ShoppingBag, Filter, Palette, UploadCloud } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/Toast";
 
@@ -205,7 +205,7 @@ export function ProductsPanel() {
   );
 }
 
-function ProductCard({ product, expanded, onToggle }: {
+function ProductCard({ product, expanded, onToggle, onSaved }: {
   product: MongoProduct;
   expanded: boolean;
   onToggle: () => void;
@@ -213,6 +213,7 @@ function ProductCard({ product, expanded, onToggle }: {
 }) {
   const hasPromo = !!product.promoPriceARS && product.promoPriceARS < product.priceARS;
   const [savingColor, setSavingColor] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const { toast } = useToast();
 
   async function saveColor(color: string) {
@@ -230,6 +231,34 @@ function ProductCard({ product, expanded, onToggle }: {
       toast("No se pudo guardar el color", "error");
     } finally {
       setSavingColor(false);
+    }
+  }
+
+  async function uploadImage(file: File) {
+    setUploadingImage(true);
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      form.set("folder", "clientes/alta-telefonia/productos");
+      const uploadRes = await fetch("/api/uploads/cloudinary", {
+        method: "POST",
+        body: form,
+      });
+      const uploadData = await uploadRes.json();
+      if (!uploadRes.ok || !uploadData.url) throw new Error(uploadData.error || "Upload failed");
+
+      const saveRes = await fetch(`/api/mongo-products/${encodeURIComponent(product.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl: uploadData.url }),
+      });
+      if (!saveRes.ok) throw new Error();
+      onSaved();
+      toast("Imagen subida a Cloudinary", "success");
+    } catch {
+      toast("No se pudo subir la imagen", "error");
+    } finally {
+      setUploadingImage(false);
     }
   }
 
@@ -366,6 +395,41 @@ function ProductCard({ product, expanded, onToggle }: {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="pt-2">
+              <label className="flex items-center gap-1 text-[10px] text-[#667781] font-semibold mb-1">
+                <UploadCloud className="w-3 h-3" />
+                Imagen del producto
+              </label>
+              <label
+                onClick={(event) => event.stopPropagation()}
+                className={cn(
+                  "flex items-center justify-center gap-2 rounded-lg border border-dashed px-2 py-2 text-xs font-semibold transition-colors",
+                  uploadingImage
+                    ? "cursor-wait bg-[#f0f2f5] text-[#aebac1]"
+                    : "cursor-pointer bg-white text-[#008069] border-[#008069]/40 hover:bg-green-50"
+                )}
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                {uploadingImage ? "Subiendo..." : "Subir a Cloudinary"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={uploadingImage}
+                  className="hidden"
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.currentTarget.value = "";
+                    if (file) void uploadImage(file);
+                  }}
+                />
+              </label>
+              {product.image && (
+                <p className="mt-1 text-[10px] text-[#aebac1] break-all">
+                  Imagen actual: {product.image.includes("res.cloudinary.com") ? "Cloudinary" : "link externo"}
+                </p>
+              )}
             </div>
           </div>
         )}

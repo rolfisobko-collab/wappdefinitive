@@ -110,9 +110,9 @@ export function AudioPlayer({ mediaId }: { mediaId: string }) {
   );
 }
 
-function ImageMessage({ mediaId, caption }: { mediaId: string; caption?: string }) {
+function ImageMessage({ mediaId, caption, cloudinaryUrl }: { mediaId: string; caption?: string; cloudinaryUrl?: string }) {
   const [open, setOpen] = useState(false);
-  const src = `/api/media/${mediaId}`;
+  const src = cloudinaryUrl || `/api/media/${mediaId}`;
   return (
     <>
       <div
@@ -286,7 +286,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
         {/* Content */}
         {isImage ? (
-          <ImageMessage mediaId={meta.mediaId as string} caption={meta.caption as string || message.content !== "[Imagen]" ? message.content : undefined} />
+          <ImageMessage
+            mediaId={meta.mediaId as string}
+            cloudinaryUrl={meta.cloudinaryUrl as string | undefined}
+            caption={meta.caption as string || message.content !== "[Imagen]" ? message.content : undefined}
+          />
         ) : isAudio ? (
           <div className="space-y-1.5">
             <AudioPlayer mediaId={meta.mediaId as string} />

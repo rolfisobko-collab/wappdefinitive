@@ -91,8 +91,13 @@ export function MediaPanel({ messages, onClose }: MediaPanelProps) {
               <div className="grid grid-cols-3 gap-1.5">
                 {imageMsgs.map((m) => {
                   let mediaId = "";
-                  try { mediaId = JSON.parse(m.metadata ?? "{}").mediaId; } catch { /* noop */ }
-                  const src = `/api/media/${mediaId}`;
+                  let cloudinaryUrl = "";
+                  try {
+                    const meta = JSON.parse(m.metadata ?? "{}");
+                    mediaId = meta.mediaId;
+                    cloudinaryUrl = meta.cloudinaryUrl;
+                  } catch { /* noop */ }
+                  const src = cloudinaryUrl || `/api/media/${mediaId}`;
                   return (
                     <button
                       key={m.id}

@@ -8,8 +8,9 @@ import {
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
 import { generateAIResponse, transcribeAudio, filterProductsByRelevance, AIMessage } from "@/lib/ai";
 import { getMongoProducts, getMongoProductById, createOrderInMongo, updateOrderStatus, expandKeywords, MongoProduct } from "@/lib/mongodb";
-import { buildAltaProductBotReply, buildAltaProductCaption, isAltaProductQuery, type AltaQualityGroup } from "@/lib/altaProductBot";
+import { buildAltaProductBotReply, buildAltaProductCaption, isAltaProductQuery, splitAltaQueries, type AltaQualityGroup } from "@/lib/altaProductBot";
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
+import { uploadImageBytesToCloudinary } from "@/lib/cloudinary";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
 
@@ -41,8 +42,19 @@ function mergeProducts(...groups: MongoProduct[][]): MongoProduct[] {
   });
 }
 
-const pendingAltaSelections = new Map<string, AltaQualityGroup[]>();
+type PendingAltaSelection = {
+  menuId: string;
+  groups: AltaQualityGroup[];
+  createdAt: number;
+};
+
+const pendingAltaSelections = new Map<string, PendingAltaSelection>();
 const lastAltaQueryByConversation = new Map<string, string>();
+const latestProductCardByConversation = new Map<string, string>();
+
+function createMenuId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
 
 // ─── Intent detection ───────────────────────────────────────────────────────
 
@@ -150,8 +162,8 @@ function recentCatalogQuery(messages: Array<Record<string, unknown>>, currentTex
 }
 
 async function resolveAltaPickFromHistory(
+  menuId: string,
   pickValue: string,
-  pickTitle: string,
   messages: Array<Record<string, unknown>>
 ): Promise<MongoProduct | null> {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -160,36 +172,41 @@ async function resolveAltaPickFromHistory(
     try {
       const meta = JSON.parse(String(m.metadata)) as {
         altaBot?: string;
+        menuId?: string;
         selectionMap?: Record<string, string>;
-        selectionTitles?: Record<string, string>;
       };
-      const mappedId = meta.selectionMap?.[pickValue];
-      if (mappedId) {
-        const product = await getMongoProductById(mappedId);
-        if (product) return product;
-      }
-      const mappedByTitle = Object.entries(meta.selectionTitles ?? {})
-        .find(([, title]) => title.toLowerCase() === pickTitle.toLowerCase())?.[0];
-      if (mappedByTitle) {
-        const productId = meta.selectionMap?.[mappedByTitle];
-        if (productId) {
-          const product = await getMongoProductById(productId);
-          if (product) return product;
-        }
+      if (meta.altaBot === "quality_menu") {
+        if (meta.menuId !== menuId) return null;
+        const mappedId = meta.selectionMap?.[pickValue] ?? pickValue;
+        return await getMongoProductById(mappedId);
       }
     } catch { /* ignore malformed metadata */ }
   }
-
-  const remembered = recentCatalogQuery(messages, pickTitle);
-  if (!remembered || !pickTitle) return null;
-  const result = await getMongoProducts({ search: `${remembered} ${pickTitle}`, limit: 20, onlyAvailable: false });
-  const tokens = pickTitle.toLowerCase().split(/\s+/).filter((token) => token.length > 1);
-  return result.products.find((product) => {
-    const name = product.name.toLowerCase();
-    return tokens.every((token) => name.includes(token));
-  }) ?? result.products[0] ?? null;
+  return null;
 }
 
+function parseAltaPickId(buttonId: string): { menuId: string | null; productId: string | null } {
+  const pickValue = buttonId.slice("alta_pick_".length);
+  const separator = pickValue.indexOf("_");
+  if (separator <= 0) return { menuId: null, productId: null };
+  return {
+    menuId: pickValue.slice(0, separator),
+    productId: pickValue.slice(separator + 1),
+  };
+}
+
+function latestProductCardFromHistory(messages: Array<Record<string, unknown>>): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.direction !== "outbound" || !m.metadata) continue;
+    try {
+      const meta = JSON.parse(String(m.metadata)) as { productId?: string; altaBot?: string };
+      if (meta.productId && ["direct", "pick"].includes(meta.altaBot ?? "")) return meta.productId;
+      if (meta.altaBot === "quality_menu") return null;
+    } catch { /* ignore malformed metadata */ }
+  }
+  return null;
+}
 // ─── AI history builder (excludes product-search exchanges) ─────────────────
 // Strategy: look at the USER message to decide if an exchange was about products.
 // This is far more reliable than trying to regex-match the AI's varying responses.
@@ -447,7 +464,19 @@ export async function POST(req: NextRequest) {
       if (msg.type === "image") {
         const image = rawMsg.image as Record<string, string> | undefined;
         if (image?.id) {
-          inboundMeta = JSON.stringify({ mediaId: image.id, caption: image.caption ?? "" });
+          let cloudinaryUrl: string | null = null;
+          if (waConfig?.accessToken) {
+            try {
+              const media = await downloadWAMedia(image.id, waConfig.accessToken);
+              if (media) {
+                const upload = await uploadImageBytesToCloudinary(media.buffer, media.mime, `${image.id}.jpg`);
+                cloudinaryUrl = upload.secureUrl;
+              }
+            } catch (e) {
+              console.warn("[image cloudinary cache]", e);
+            }
+          }
+          inboundMeta = JSON.stringify({ mediaId: image.id, caption: image.caption ?? "", cloudinaryUrl });
         }
       }
 
@@ -507,13 +536,13 @@ export async function POST(req: NextRequest) {
 
         // ALTA PRODUCT QUALITY PICK
         if (buttonId.startsWith("alta_pick_")) {
-          const pickValue = buttonId.slice("alta_pick_".length);
-          const idx = Number(pickValue);
-          const groups = pendingAltaSelections.get(conversation.id) ?? [];
-          const group = Number.isFinite(idx) ? groups[idx] : null;
-          const product = group?.products[0]
-            ?? await getMongoProductById(pickValue)
-            ?? await resolveAltaPickFromHistory(pickValue, msg.interactivePayload.title, (conversation as Record<string, unknown>).messages as Array<Record<string, unknown>> ?? []);
+          const { menuId, productId } = parseAltaPickId(buttonId);
+          const pending = pendingAltaSelections.get(conversation.id);
+          const product = menuId && productId && pending?.menuId === menuId
+            ? pending.groups.flatMap((group) => group.products).find((p) => p.id === productId) ?? await getMongoProductById(productId)
+            : menuId && productId
+              ? await resolveAltaPickFromHistory(menuId, productId, (conversation as Record<string, unknown>).messages as Array<Record<string, unknown>> ?? [])
+              : null;
 
           if (product) {
             const caption = buildAltaProductCaption(product);
@@ -558,9 +587,10 @@ export async function POST(req: NextRequest) {
                 deliveryError,
               }),
             });
+            latestProductCardByConversation.set(conversation.id, product.id);
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
           } else {
-            const text = "No encontre esa opcion. Escribime de nuevo el producto y te muestro las calidades.";
+            const text = "Esa opcion ya no esta vigente. Escribime de nuevo el producto y te muestro las opciones actualizadas.";
             const res = await wa.sendTextMessage(contact.phone, text);
             const outMsg = await createMessage({
               conversationId: conversation.id,
@@ -569,7 +599,7 @@ export async function POST(req: NextRequest) {
               status: "sent",
               waMessageId: waMessageIdFrom(res),
               content: text,
-              metadata: JSON.stringify({ isProductSearch: true, altaBot: "pick_not_found", pickValue, pickTitle: msg.interactivePayload.title }),
+              metadata: JSON.stringify({ isProductSearch: true, altaBot: "stale_pick", menuId, productId, pickTitle: msg.interactivePayload.title }),
             });
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
           }
@@ -580,6 +610,22 @@ export async function POST(req: NextRequest) {
         if (buttonId.startsWith("cart_add_")) {
           const mongoId = buttonId.slice("cart_add_".length);
           try {
+            const latestProductId = latestProductCardByConversation.get(conversation.id)
+              ?? latestProductCardFromHistory((conversation as Record<string, unknown>).messages as Array<Record<string, unknown>> ?? []);
+            if (latestProductId !== mongoId) {
+              const staleText = "Ese boton de agregar ya no esta vigente. Volve a buscar el producto y agregalo desde la ficha actual.";
+              await wa.sendTextMessage(contact.phone, staleText);
+              const staleMsg = await createMessage({
+                conversationId: conversation.id,
+                direction: "outbound",
+                sender: "ai",
+                content: staleText,
+                status: "sent",
+                metadata: JSON.stringify({ isProductSearch: true, altaBot: "stale_cart_add", productId: mongoId, latestProductId }),
+              });
+              io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: staleMsg });
+              continue;
+            }
             const product: MongoProduct | null = await getMongoProductById(mongoId);
             if (product) {
               const updatedCart = await addToCart(conversation.id, {
@@ -865,6 +911,43 @@ export async function POST(req: NextRequest) {
       // Alta deterministic product bot. Product/price/stock messages never fall through to free AI.
       try {
         if (forceCatalogBot) {
+          const splitQueries = splitAltaQueries(textForSearch);
+          if (!isRememberedFollowUp && splitQueries.length > 1) {
+            const catalogResult = await getMongoProducts({ limit: 5000, onlyAvailable: false });
+            const responses: string[] = [];
+
+            for (const query of splitQueries) {
+              const queryResult = await getMongoProducts({ search: query, limit: 150, onlyAvailable: false });
+              const products = mergeProducts(queryResult.products, catalogResult.products);
+              const reply = buildAltaProductBotReply(products, query, true);
+              if (reply.mode === "direct") {
+                responses.push(`*${query}*\n${buildAltaProductCaption(reply.product)}`);
+              } else if (reply.mode === "quality_menu") {
+                responses.push(`*${query}*\n${reply.text}`);
+              } else if ("text" in reply) {
+                responses.push(`*${query}*\n${reply.text}`);
+              }
+            }
+
+            pendingAltaSelections.delete(conversation.id);
+            latestProductCardByConversation.delete(conversation.id);
+            const multiText = `${responses.join("\n\n---\n\n")}\n\nPara elegir/agregar, mandame una busqueda por vez asi te paso la ficha exacta.`;
+            const outMsg = await createMessage({
+              conversationId: conversation.id,
+              direction: "outbound",
+              sender: "ai",
+              status: "sent",
+              content: multiText,
+              metadata: JSON.stringify({ isProductSearch: true, altaBot: "multi_query", count: splitQueries.length }),
+            });
+            io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
+            if (waConfig?.phoneNumberId && waConfig?.accessToken) {
+              const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+              await wa.sendTextMessage(contact.phone, multiText);
+            }
+            continue;
+          }
+
           const [catalogResult, queryResult] = await Promise.all([
             getMongoProducts({ limit: 5000, onlyAvailable: false }),
             getMongoProducts({ search: altaQuery, limit: 150, onlyAvailable: false }),
@@ -896,6 +979,7 @@ export async function POST(req: NextRequest) {
 
           if (altaReply.mode === "clarify" || altaReply.mode === "not_found") {
             lastAltaQueryByConversation.set(conversation.id, altaQuery);
+            latestProductCardByConversation.delete(conversation.id);
             const outMsg = await createMessage({
               conversationId: conversation.id,
               direction: "outbound",
@@ -914,7 +998,9 @@ export async function POST(req: NextRequest) {
 
           if (altaReply.mode === "quality_menu") {
             lastAltaQueryByConversation.set(conversation.id, altaQuery);
-            pendingAltaSelections.set(conversation.id, altaReply.groups);
+            latestProductCardByConversation.delete(conversation.id);
+            const menuId = createMenuId();
+            pendingAltaSelections.set(conversation.id, { menuId, groups: altaReply.groups, createdAt: Date.now() });
             const selectionMap = Object.fromEntries(
               altaReply.groups.map((group) => {
                 const product = group.products[0];
@@ -933,7 +1019,7 @@ export async function POST(req: NextRequest) {
               sender: "ai",
               status: "sent",
               content: altaReply.text,
-              metadata: JSON.stringify({ isProductSearch: true, altaBot: "quality_menu", selectionMap, selectionTitles }),
+              metadata: JSON.stringify({ isProductSearch: true, altaBot: "quality_menu", menuId, selectionMap, selectionTitles }),
             });
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: outMsg });
 
@@ -950,7 +1036,7 @@ export async function POST(req: NextRequest) {
                   rows: altaReply.groups.map((group, index) => {
                     const product = group.products[0];
                     return {
-                      id: `alta_pick_${product.id}`,
+                      id: `alta_pick_${menuId}_${product.id}`,
                       title: `${index + 1}. ${group.label}`.slice(0, 24),
                       description: `${product.name} - ${new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(product.promoPriceARS ?? product.priceARS)}`.slice(0, 72),
                     };
@@ -1022,6 +1108,7 @@ export async function POST(req: NextRequest) {
                 deliveryError,
               }),
             });
+            latestProductCardByConversation.set(conversation.id, product.id);
             io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: cardMsg });
             continue;
           }
