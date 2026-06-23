@@ -922,9 +922,9 @@ export async function POST(req: NextRequest) {
               })
             );
             const selectionTitles = Object.fromEntries(
-              altaReply.groups.map((group) => {
+              altaReply.groups.map((group, index) => {
                 const product = group.products[0];
-                return [product.id, group.label.slice(0, 24)];
+                return [product.id, `${index + 1}. ${group.label}`.slice(0, 24)];
               })
             );
             const outMsg = await createMessage({
@@ -951,7 +951,7 @@ export async function POST(req: NextRequest) {
                     const product = group.products[0];
                     return {
                       id: `alta_pick_${product.id}`,
-                      title: group.label.slice(0, 24),
+                      title: `${index + 1}. ${group.label}`.slice(0, 24),
                       description: `${product.name} - ${new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(product.promoPriceARS ?? product.priceARS)}`.slice(0, 72),
                     };
                   }),

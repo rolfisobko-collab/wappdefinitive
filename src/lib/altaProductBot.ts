@@ -62,7 +62,8 @@ const PART_ALIASES: Record<string, string[]> = {
   "FLEX MAIN": ["flex main", "main flex"],
   "POWER FLEX": ["power flex", "flex power", "flex encendido", "boton encendido"],
   MODULO: ["modulo", "modulos", "m dulo", "m dulos", "pantalla", "display", "lcd", "pantalla completa"],
-  GLASS: ["glass", "glas", "vidrio", "vidirio", "tactil", "touch", "oca"],
+  "VIDRIO TEMPLADO": ["vidrio templado", "templado", "vidrio protector", "protector de pantalla", "protector", "lamina", "hidrogel"],
+  GLASS: ["glass", "glas", "tactil", "touch", "oca"],
   BATERIA: ["bateria", "battery", "pila"],
   CAMARA: ["camara", "camera", "frontal", "trasera"],
   "VISOR DE CAMARA": ["visor de camara", "lente camara", "vidrio camara"],
@@ -73,7 +74,7 @@ const PART_ALIASES: Record<string, string[]> = {
   FPC: ["fpc"],
   CHASIS: ["chasis", "marco completo", "frame"],
   ANTENA: ["antena", "flex antena", "cable antena", "coaxial", "senal", "señal"],
-  ACCESORIO: ["accesorio", "accesorios", "templado", "vidrio templado", "hidrogel", "lamina", "protector"],
+  ACCESORIO: ["accesorio", "accesorios", "tpu"],
   CARGADOR: ["cargador", "cargadores", "charger", "carga rapida", "carga rápida", "fuente", "adaptador"],
   MEMORIA: ["memoria", "memorias", "memoria sd", "memorias sd", "micro sd", "microsd", "tarjeta sd", "pendrive"],
   CELULAR: ["celular", "celulares", "telefono", "telefonos", "smartphone", "equipo", "equipos"],
@@ -94,6 +95,7 @@ const CATEGORY_MATCH: Record<string, string[]> = {
   "FLEX MAIN": ["main flex"],
   "POWER FLEX": ["power flex"],
   MODULO: ["modulo"],
+  "VIDRIO TEMPLADO": ["vidrio templado", "vidrios templados", "templado", "protector de pantalla", "lamina", "hidrogel"],
   GLASS: ["glass"],
   BATERIA: ["bateria"],
   CAMARA: ["camara"],
@@ -105,14 +107,14 @@ const CATEGORY_MATCH: Record<string, string[]> = {
   FPC: ["fpc"],
   CHASIS: ["chasis"],
   ANTENA: ["antena", "flex antena", "cable antena", "coaxial", "blindaje"],
-  ACCESORIO: ["accesorio", "glass", "tactil"],
+  ACCESORIO: ["accesorio"],
   CARGADOR: ["cargador", "accesorio", "herramienta"],
   MEMORIA: ["memoria", "accesorio"],
   CELULAR: ["celular"],
   HERRAMIENTAS: ["herramienta", "insumo"],
 };
 
-const PRODUCT_MENU_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "CELULAR", "ACCESORIO"]);
+const PRODUCT_MENU_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "CELULAR", "ACCESORIO", "VIDRIO TEMPLADO"]);
 const GENERIC_ACCESSORY_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "ACCESORIO"]);
 
 const QUALITY_ORDER = [
@@ -421,7 +423,7 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
     const withModel = result.filter((p) => modelMatches(p, cls.model as string));
     if (withModel.length > 0 || !cls.partType || !GENERIC_ACCESSORY_PARTS.has(cls.partType)) result = withModel;
   }
-  if (cls.color) result = result.filter((p) => productColorMatches(p, cls.color));
+  if (cls.color) result = result.filter((p) => productColorMatches(p, cls.color as string));
   if (cls.quality) {
     const withQuality = result.filter((p) => detectProductQuality(p) === cls.quality || norm(productHaystack(p)).includes(norm(cls.quality)));
     if (withQuality.length > 0) result = withQuality;
@@ -530,9 +532,19 @@ function sortProducts(products: MongoProduct[]): MongoProduct[] {
   });
 }
 
+function uniqueProducts(products: MongoProduct[]): MongoProduct[] {
+  const seen = new Set<string>();
+  return products.filter((product) => {
+    const key = product.id || String(product.sku ?? "") || product.name;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function groupByQuality(products: MongoProduct[]): AltaQualityGroup[] {
   const map = new Map<string, { meta: ReturnType<typeof detectReplacementMeta>; products: MongoProduct[] }>();
-  for (const product of products) {
+  for (const product of uniqueProducts(products)) {
     const meta = detectReplacementMeta(product);
     const current = map.get(meta.label) ?? { meta, products: [] };
     current.products.push(product);
@@ -552,7 +564,7 @@ function groupByQuality(products: MongoProduct[]): AltaQualityGroup[] {
 }
 
 function groupByProduct(products: MongoProduct[]): AltaQualityGroup[] {
-  return sortProducts(products).slice(0, 10).map((product) => ({
+  return sortProducts(uniqueProducts(products)).slice(0, 10).map((product) => ({
     label: shortName(product, 38),
     replacementBrand: null,
     quality: null,
@@ -564,7 +576,7 @@ function groupByProduct(products: MongoProduct[]): AltaQualityGroup[] {
 
 function groupByColor(products: MongoProduct[]): AltaQualityGroup[] {
   const map = new Map<string, MongoProduct[]>();
-  for (const product of products) {
+  for (const product of uniqueProducts(products)) {
     const color = productColor(product) ?? "sin color";
     map.set(color, [...(map.get(color) ?? []), product]);
   }
@@ -646,6 +658,7 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
   let all = metadataMatches.length ? metadataMatches : filterProducts(products, cls);
   all = all.filter((product) => matchesRequestedProduct(product, cls));
   if (!all.length) all = looseProductFallback(products, query, cls).filter((product) => matchesRequestedProduct(product, cls));
+  all = uniqueProducts(all);
   const searchLabel = labelForSearch(cls);
 
   if (!all.length) {
