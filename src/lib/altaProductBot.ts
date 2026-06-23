@@ -36,7 +36,7 @@ const BRANDS = [
 
 const BRAND_ALIASES: Record<string, string[]> = {
   IPHONE: ["iphone", "iph", "ip", "apple"],
-  SAMSUNG: ["samsung", "galaxy"],
+  SAMSUNG: ["samsung", "sam", "galaxy"],
   MOTOROLA: ["motorola", "moto"],
   XIAOMI: ["xiaomi", "redmi", "poco", "mi"],
   NOKIA: ["nokia"],
@@ -57,7 +57,11 @@ const BRAND_ALIASES: Record<string, string[]> = {
 };
 
 const PART_ALIASES: Record<string, string[]> = {
-  "PLACA DE CARGA": ["placa de carga", "placa carga", "pin carga", "puerto carga", "conector carga", "dock"],
+  "PLACA DE CARGA": [
+    "placa de carga", "placa carga", "pin de carga", "pines de carga", "pin carga",
+    "pin de carha", "pines de carha", "puerto de carga", "puerto carga",
+    "conector de carga", "conector carga", "centro de carga", "dock",
+  ],
   "FLEX DE CARGA": ["flex de carga", "flex carga"],
   "FLEX MAIN": ["flex main", "main flex"],
   "POWER FLEX": ["power flex", "flex power", "flex encendido", "boton encendido"],
@@ -258,6 +262,7 @@ function extractModel(raw: string, brand: string | null): string | null {
   }
 
   if (brand === "MOTOROLA") {
+    if (/\b(?:MOTO\s+)?C\b/.test(clean)) return "C";
     const model = clean.match(/\b(?:MOTO\s+)?([GES]\s*\d{1,3}[A-Z]?\s*(?:PLAY|PLUS|POWER|LITE|PRO|ULTRA|EDGE|STYLUS)?|(?:EDGE\s*)?\d{1,3}\s*(?:NEO|FUSION|PRO|ULTRA|LITE)?)\b/);
     if (model) return model[1].replace(/\s+/g, " ").trim();
   }
@@ -484,6 +489,7 @@ function productColorMatches(product: MongoProduct, color: string): boolean {
 const QUERY_SYNONYMS: Record<string, string[]> = {
   glas: ["glass"],
   vidirio: ["vidrio", "glass", "oca"],
+  carha: ["carga"],
   passta: ["pasta"],
   estano: ["estaño"],
   soldado: ["soldador", "soldadura"],
