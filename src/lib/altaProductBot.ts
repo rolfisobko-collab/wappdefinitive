@@ -58,9 +58,11 @@ const BRAND_ALIASES: Record<string, string[]> = {
 
 const PART_ALIASES: Record<string, string[]> = {
   "PLACA DE CARGA": [
-    "placa de carga", "placa carga", "pin de carga", "pines de carga", "pin carga",
-    "pin de carha", "pines de carha", "puerto de carga", "puerto carga",
-    "conector de carga", "conector carga", "centro de carga", "dock",
+    "placa de carga", "placas de carga", "placa carga", "placa de carha", "placas de carha",
+  ],
+  "PIN DE CARGA": [
+    "pin de carga", "pines de carga", "pin carga", "pin de carha", "pines de carha",
+    "puerto de carga", "puerto carga", "conector de carga", "conector carga", "centro de carga", "dock",
   ],
   "FLEX DE CARGA": ["flex de carga", "flex carga"],
   "FLEX MAIN": ["flex main", "main flex"],
@@ -94,7 +96,8 @@ const PART_ALIASES: Record<string, string[]> = {
 };
 
 const CATEGORY_MATCH: Record<string, string[]> = {
-  "PLACA DE CARGA": ["placa de carga", "flex de carga", "pin de carga", "pines de carga"],
+  "PLACA DE CARGA": ["placa de carga", "placas de carga", "placa_carga"],
+  "PIN DE CARGA": ["pines de carga", "pin de carga", "puerto de carga"],
   "FLEX DE CARGA": ["flex de carga"],
   "FLEX MAIN": ["main flex"],
   "POWER FLEX": ["power flex"],
@@ -343,8 +346,15 @@ function textMatchesAnySignal(text: string, signals: string[]): boolean {
   return signals.some((signal) => wordIncludes(text, signal) || text.includes(signal));
 }
 
+function isIncompatiblePartCategory(category: string, partType: string): boolean {
+  if (partType === "PLACA DE CARGA") return category.includes("pines de carga");
+  if (partType === "PIN DE CARGA") return category.includes("placa de carga");
+  return false;
+}
+
 function categoryMatches(product: MongoProduct, partType: string): boolean {
   const category = norm(product.category);
+  if (isIncompatiblePartCategory(category, partType)) return false;
   const metadata = productMetadataText(product);
   const partText = norm([
     product.name,
@@ -363,6 +373,7 @@ function categoryMatches(product: MongoProduct, partType: string): boolean {
 
 function requestedPartMatches(product: MongoProduct, partType: string): boolean {
   const category = norm(product.category);
+  if (isIncompatiblePartCategory(category, partType)) return false;
   const metadata = productMetadataText(product);
   const productText = norm([
     product.name,
