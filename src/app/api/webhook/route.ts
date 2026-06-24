@@ -13,6 +13,7 @@ import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from 
 import { uploadImageBytesToCloudinary } from "@/lib/cloudinary";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
+const DEFAULT_WA_CATALOG_ID = "3124781991061593";
 
 type GlobalWithIO = {
   io?: {
@@ -33,6 +34,25 @@ function sendErrorSummary(error: unknown): string {
   return [err.code, err.message, status, data].filter(Boolean).join(" | ") || "unknown";
 }
 
+function waCatalogId(config: Record<string, string> | null): string | null {
+  return config?.catalogId || process.env.WA_CATALOG_ID || DEFAULT_WA_CATALOG_ID || null;
+}
+
+function productRetailerId(product: MongoProduct): string {
+  const raw = product.sku ? `sku_${product.sku}` : `id_${product.id}`;
+  return raw.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 100);
+}
+
+async function productFromRetailerId(retailerId: string): Promise<MongoProduct | null> {
+  const sku = retailerId.match(/^sku_(\d+)$/i)?.[1];
+  if (sku) {
+    const result = await getMongoProducts({ search: sku, limit: 1, onlyAvailable: false });
+    return result.products.find((product) => String(product.sku ?? "") === sku) ?? result.products[0] ?? null;
+  }
+  const mongoId = retailerId.replace(/^id_/i, "");
+  return mongoId ? getMongoProductById(mongoId) : null;
+}
+
 function mergeProducts(...groups: MongoProduct[][]): MongoProduct[] {
   const seen = new Set<string>();
   return groups.flat().filter((product) => {
@@ -40,6 +60,66 @@ function mergeProducts(...groups: MongoProduct[][]): MongoProduct[] {
     seen.add(product.id);
     return true;
   });
+}
+
+async function sendCatalogOrProductCard(
+  wa: ReturnType<typeof getWAClient>,
+  to: string,
+  catalogId: string | null,
+  product: MongoProduct,
+  caption: string,
+  buttons: { id: string; title: string }[]
+): Promise<{ waMessageId: string | null; deliveryMethod: string; deliveryError: string | null }> {
+  if (catalogId) {
+    try {
+      const res = await wa.sendProductCatalog(to, catalogId, productRetailerId(product));
+      return { waMessageId: waMessageIdFrom(res), deliveryMethod: "wa_catalog_product", deliveryError: null };
+    } catch (catalogError) {
+      const catalogSummary = sendErrorSummary(catalogError);
+      console.warn(`[WH] catalog product failed sku=${product.sku ?? ""}: ${catalogSummary}`);
+      try {
+        const res = await wa.sendProductCard(to, product.image, caption, buttons);
+        return {
+          waMessageId: waMessageIdFrom(res),
+          deliveryMethod: product.image ? "card_image_after_catalog_fail" : "card_buttons_after_catalog_fail",
+          deliveryError: catalogSummary,
+        };
+      } catch (imageError) {
+        const imageSummary = sendErrorSummary(imageError);
+        try {
+          const res = await wa.sendProductCard(to, null, caption, buttons);
+          return {
+            waMessageId: waMessageIdFrom(res),
+            deliveryMethod: "card_buttons_after_catalog_fail",
+            deliveryError: `${catalogSummary} | ${imageSummary}`,
+          };
+        } catch (buttonError) {
+          const buttonSummary = sendErrorSummary(buttonError);
+          const res = await wa.sendTextMessage(to, caption);
+          return {
+            waMessageId: waMessageIdFrom(res),
+            deliveryMethod: "text_fallback_after_catalog_fail",
+            deliveryError: `${catalogSummary} | ${imageSummary} | ${buttonSummary}`,
+          };
+        }
+      }
+    }
+  }
+
+  try {
+    const res = await wa.sendProductCard(to, product.image, caption, buttons);
+    return { waMessageId: waMessageIdFrom(res), deliveryMethod: product.image ? "card_image" : "card_buttons", deliveryError: null };
+  } catch (imageError) {
+    const imageSummary = sendErrorSummary(imageError);
+    try {
+      const res = await wa.sendProductCard(to, null, caption, buttons);
+      return { waMessageId: waMessageIdFrom(res), deliveryMethod: "card_buttons", deliveryError: imageSummary };
+    } catch (buttonError) {
+      const buttonSummary = sendErrorSummary(buttonError);
+      const res = await wa.sendTextMessage(to, caption);
+      return { waMessageId: waMessageIdFrom(res), deliveryMethod: "text_fallback", deliveryError: `${imageSummary} | ${buttonSummary}` };
+    }
+  }
 }
 
 type PendingAltaSelection = {
@@ -530,6 +610,63 @@ export async function POST(req: NextRequest) {
       }
 
       // ── Handle interactive replies (button_reply and list_reply) ─────────
+      if (msg.type === "order" && waConfig?.phoneNumberId && waConfig?.accessToken) {
+        const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+        const raw = msg.rawMessage as {
+          order?: {
+            catalog_id?: string;
+            product_items?: Array<{
+              product_retailer_id?: string;
+              quantity?: string | number;
+            }>;
+          };
+        };
+        const orderItems = raw.order?.product_items ?? [];
+        const added: string[] = [];
+        const missing: string[] = [];
+
+        for (const item of orderItems) {
+          const retailerId = String(item.product_retailer_id ?? "");
+          const quantity = Math.max(1, Number(item.quantity ?? 1) || 1);
+          const product = retailerId ? await productFromRetailerId(retailerId) : null;
+          if (!product) {
+            missing.push(retailerId || "sin_id");
+            continue;
+          }
+          await addToCart(conversation.id, {
+            mongoProductId: product.id,
+            name: product.name,
+            image: product.image,
+            unitPriceUSD: product.promoPrice ?? product.price,
+            unitPriceARS: product.promoPriceARS ?? product.priceARS,
+          }, quantity);
+          added.push(`${product.name} x ${quantity}`);
+        }
+
+        const updatedCart = await getCart(conversation.id);
+        io?.to(`conversation:${conversation.id}`).emit("cart-updated", { conversationId: conversation.id, cart: updatedCart });
+
+        const items = (updatedCart as Record<string, unknown> | null)?.items as Array<{ name: string; quantity: number; unitPriceUSD: number; unitPriceARS: number }> ?? [];
+        const cartText = items.length
+          ? `${buildCartText(items)}\n\nRecibi tu carrito de WhatsApp. Confirmalo para elegir forma de pago.`
+          : "Recibi el pedido de WhatsApp, pero no pude vincular los productos al catalogo interno.";
+        const sendText = missing.length ? `${cartText}\n\nNo pude vincular: ${missing.join(", ")}` : cartText;
+        await wa.sendButtons(contact.phone, sendText, items.length
+          ? [{ id: "cart_confirm", title: "Confirmar" }, { id: "cart_clear", title: "Vaciar" }]
+          : [{ id: "catalog_more", title: "Buscar de nuevo" }]
+        );
+        const orderMsg = await createMessage({
+          conversationId: conversation.id,
+          direction: "outbound",
+          sender: "ai",
+          content: sendText,
+          status: "sent",
+          metadata: JSON.stringify({ isProductSearch: true, altaBot: "wa_catalog_order", catalogId: raw.order?.catalog_id, added, missing }),
+        });
+        io?.to(`conversation:${conversation.id}`).emit("ai-response", { conversationId: conversation.id, message: orderMsg });
+        continue;
+      }
+
       if (msg.interactivePayload && waConfig?.phoneNumberId && waConfig?.accessToken) {
         const buttonId = msg.interactivePayload.id;
         const wa       = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
@@ -549,33 +686,21 @@ export async function POST(req: NextRequest) {
             const cardButtons = product.available
               ? [{ id: `cart_add_${product.id}`, title: "Agregar" }, { id: "cart_view", title: "Ver carrito" }]
               : [{ id: "catalog_more", title: "Ver mas" }];
-            let waMessageId: string | null = null;
-            let deliveryMethod = "panel_only";
-            let deliveryError: string | null = null;
-            try {
-              const res = await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
-              waMessageId = waMessageIdFrom(res);
-              deliveryMethod = product.image ? "card_image" : "card_buttons";
-            } catch (imageError) {
-              deliveryError = sendErrorSummary(imageError);
-              try {
-                const res = await wa.sendProductCard(contact.phone, null, caption, cardButtons);
-                waMessageId = waMessageIdFrom(res);
-                deliveryMethod = "card_buttons";
-              } catch (buttonError) {
-                deliveryError = sendErrorSummary(buttonError);
-                const res = await wa.sendTextMessage(contact.phone, caption);
-                waMessageId = waMessageIdFrom(res);
-                deliveryMethod = "text_fallback";
-              }
-            }
+            const delivery = await sendCatalogOrProductCard(
+              wa,
+              contact.phone,
+              waCatalogId(waConfig),
+              product,
+              caption,
+              cardButtons
+            );
 
             const cardMsg = await createMessage({
               conversationId: conversation.id,
               direction: "outbound",
               sender: "ai",
               status: "sent",
-              waMessageId,
+              waMessageId: delivery.waMessageId,
               content: caption,
               metadata: JSON.stringify({
                 productId: product.id,
@@ -583,8 +708,10 @@ export async function POST(req: NextRequest) {
                 buttons: cardButtons,
                 isProductSearch: true,
                 altaBot: "pick",
-                deliveryMethod,
-                deliveryError,
+                catalogId: waCatalogId(waConfig),
+                productRetailerId: productRetailerId(product),
+                deliveryMethod: delivery.deliveryMethod,
+                deliveryError: delivery.deliveryError,
               }),
             });
             latestProductCardByConversation.set(conversation.id, product.id);
@@ -1025,6 +1152,22 @@ export async function POST(req: NextRequest) {
 
             if (waConfig?.phoneNumberId && waConfig?.accessToken) {
               const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
+              const catalogId = waCatalogId(waConfig);
+              const menuProducts = altaReply.groups.map((group) => group.products[0]).filter(Boolean);
+              if (catalogId && menuProducts.length) {
+                try {
+                  await wa.sendProductCatalogList(
+                    contact.phone,
+                    catalogId,
+                    "Productos encontrados",
+                    "Te paso las opciones disponibles. Podes abrirlas y agregarlas al carrito de WhatsApp.",
+                    [{ title: "Opciones", productIds: menuProducts.slice(0, 30).map(productRetailerId) }]
+                  );
+                  continue;
+                } catch (catalogError) {
+                  console.warn(`[WH] catalog product_list failed: ${sendErrorSummary(catalogError)}`);
+                }
+              }
               await wa.sendInteractiveList(
                 contact.phone,
                 "Elegir calidad",
@@ -1060,35 +1203,19 @@ export async function POST(req: NextRequest) {
 
             if (waConfig?.phoneNumberId && waConfig?.accessToken) {
               const wa = getWAClient(waConfig.phoneNumberId, waConfig.accessToken);
-              try {
-                console.log(`[WH] sending product card image=${Boolean(product.image)} sku=${product.sku ?? ""} to=${contact.phone}`);
-                const res = await wa.sendProductCard(contact.phone, product.image, caption, cardButtons);
-                waMessageId = waMessageIdFrom(res);
-                deliveryMethod = product.image ? "card_image" : "card_buttons";
-                console.log(`[WH] product card sent OK method=${deliveryMethod} waMessageId=${waMessageId ?? ""}`);
-              } catch (imageError) {
-                deliveryError = sendErrorSummary(imageError);
-                console.warn(`[WH] product card image failed sku=${product.sku ?? ""}: ${deliveryError}`);
-                try {
-                  const res = await wa.sendProductCard(contact.phone, null, caption, cardButtons);
-                  waMessageId = waMessageIdFrom(res);
-                  deliveryMethod = "card_buttons";
-                  console.log(`[WH] product card fallback sent OK waMessageId=${waMessageId ?? ""}`);
-                } catch (buttonError) {
-                  deliveryError = sendErrorSummary(buttonError);
-                  console.warn(`[WH] product card fallback failed sku=${product.sku ?? ""}: ${deliveryError}`);
-                  try {
-                    const res = await wa.sendTextMessage(contact.phone, caption);
-                    waMessageId = waMessageIdFrom(res);
-                    deliveryMethod = "text_fallback";
-                    console.log(`[WH] product text fallback sent OK waMessageId=${waMessageId ?? ""}`);
-                  } catch (textError) {
-                    deliveryError = sendErrorSummary(textError);
-                    deliveryMethod = "failed";
-                    console.error(`[WH] product text fallback failed sku=${product.sku ?? ""}: ${deliveryError}`);
-                  }
-                }
-              }
+              console.log(`[WH] sending catalog/card sku=${product.sku ?? ""} to=${contact.phone}`);
+              const delivery = await sendCatalogOrProductCard(
+                wa,
+                contact.phone,
+                waCatalogId(waConfig),
+                product,
+                caption,
+                cardButtons
+              );
+              waMessageId = delivery.waMessageId;
+              deliveryMethod = delivery.deliveryMethod;
+              deliveryError = delivery.deliveryError;
+              console.log(`[WH] catalog/card sent method=${deliveryMethod} waMessageId=${waMessageId ?? ""}`);
             }
 
             const cardMsg = await createMessage({
@@ -1104,6 +1231,8 @@ export async function POST(req: NextRequest) {
                 buttons: cardButtons,
                 isProductSearch: true,
                 altaBot: "direct",
+                catalogId: waCatalogId(waConfig),
+                productRetailerId: productRetailerId(product),
                 deliveryMethod,
                 deliveryError,
               }),

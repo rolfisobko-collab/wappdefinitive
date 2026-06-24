@@ -79,6 +79,36 @@ export function getWAClient(phoneNumberId: string, accessToken: string) {
       return res.data;
     },
 
+    async sendProductCatalogList(
+      to: string,
+      catalogId: string,
+      headerText: string,
+      bodyText: string,
+      sections: { title: string; productIds: string[] }[]
+    ) {
+      const res = await client.post("/messages", {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "interactive",
+        interactive: {
+          type: "product_list",
+          header: { type: "text", text: headerText.slice(0, 60) },
+          body: { text: bodyText.slice(0, 1024) },
+          action: {
+            catalog_id: catalogId,
+            sections: sections.slice(0, 10).map((section) => ({
+              title: section.title.slice(0, 24),
+              product_items: section.productIds.slice(0, 30).map((id) => ({
+                product_retailer_id: id.slice(0, 100),
+              })),
+            })),
+          },
+        },
+      });
+      return res.data;
+    },
+
     async sendProductCard(
       to: string,
       imageUrl: string | null,
