@@ -9,6 +9,26 @@ function csv(value: unknown): string {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+function humanizeCatalogText(value: unknown): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const letters = text.replace(/[^a-zA-ZÁÉÍÓÚÜÑáéíóúüñ]/g, "");
+  const upperLetters = letters.replace(/[^A-ZÁÉÍÓÚÜÑ]/g, "").length;
+  if (!letters || upperLetters / letters.length < 0.75) return text;
+
+  return text.toLocaleLowerCase("es-AR").replace(
+    /(^|[\s/+\-])([a-záéíóúüñ])/g,
+    (match, prefix: string, char: string) => `${prefix}${char.toLocaleUpperCase("es-AR")}`
+  ).replace(/\bIphone\b/g, "iPhone")
+    .replace(/\bIpad\b/g, "iPad")
+    .replace(/\bMacbook\b/g, "MacBook")
+    .replace(/\bOca\b/g, "OCA")
+    .replace(/\bTpu\b/g, "TPU")
+    .replace(/\bLcd\b/g, "LCD")
+    .replace(/\bUsb\b/g, "USB")
+    .replace(/\bTipo-C\b/g, "Tipo-C");
+}
+
 function absoluteBaseUrl(req: Request): string {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (configured?.startsWith("http")) return configured.replace(/\/$/, "");
@@ -23,7 +43,9 @@ function absoluteBaseUrl(req: Request): string {
 function imageUrl(product: MongoProduct, baseUrl: string): string {
   const image = product.image || product.images?.find(Boolean);
   if (image && /^https?:\/\//i.test(image) && /res\.cloudinary\.com\/.+\/image\/upload\//i.test(image)) {
-    return image.replace(/\/image\/upload\//i, "/image/upload/f_png,q_auto,w_1200,h_1200,c_pad,b_white/");
+    return image
+      .replace(/\/image\/upload\//i, "/image/upload/f_png,q_auto,w_1200,h_1200,c_pad,b_white/")
+      .replace(/\.(webp|jpe?g)([?#].*)?$/i, ".png$2");
   }
   return `${baseUrl}/api/catalog-placeholder.png`;
 }
@@ -35,10 +57,10 @@ function retailerId(product: MongoProduct): string {
 
 function productDescription(product: MongoProduct): string {
   return [
-    product.description,
-    product.category ? `Categoria: ${product.category}` : null,
+    humanizeCatalogText(product.description),
+    product.category ? `Categoria: ${humanizeCatalogText(product.category)}` : null,
     product.deviceBrand || product.deviceModel
-      ? `Equipo: ${[product.deviceBrand, product.deviceModel].filter(Boolean).join(" ")}`
+      ? `Equipo: ${[product.deviceBrand, product.deviceModel].filter(Boolean).map(humanizeCatalogText).join(" ")}`
       : null,
     product.sku ? `SKU: ${product.sku}` : null,
   ].filter(Boolean).join(" | ").slice(0, 999);
@@ -70,15 +92,15 @@ export async function GET(req: Request) {
 
   const rows = products.map((product) => [
     retailerId(product),
-    product.name.slice(0, 150),
+    humanizeCatalogText(product.name).slice(0, 150),
     productDescription(product) || product.name,
     product.stock > 0 ? "in stock" : "out of stock",
     "new",
     `${Math.max(1, Math.round(product.promoPriceARS ?? product.priceARS))} ARS`,
     productUrl(product, baseUrl),
     imageUrl(product, baseUrl),
-    product.deviceBrand || product.partBrand || "Alta Telefonia",
-    product.category || "Repuestos",
+    humanizeCatalogText(product.deviceBrand || product.partBrand || "Alta Telefonia"),
+    humanizeCatalogText(product.category || "Repuestos"),
     product.sku ? `SKU ${product.sku}` : "",
     product.stock > 0 ? "Disponible" : "Sin stock",
   ].map(csv).join(","));
