@@ -6,6 +6,7 @@ export type AltaClassification = {
   partType: string | null;
   brand: string | null;
   model: string | null;
+  line: string | null;
   color: string | null;
   quality: string | null;
   excludedPartTypes: string[];
@@ -69,7 +70,7 @@ const PART_ALIASES: Record<string, string[]> = {
   "POWER FLEX": ["power flex", "flex power", "flex encendido", "boton encendido"],
   MODULO: ["modulo", "modulos", "m dulo", "m dulos", "pantalla", "display", "lcd", "pantalla completa"],
   "VIDRIO TEMPLADO": ["vidrio templado", "templado", "vidrio protector", "protector de pantalla", "protector", "lamina", "hidrogel"],
-  GLASS: ["vidrio de pantalla", "vidrio oca", "glass", "glas", "vidrio", "tactil", "touch", "oca"],
+  GLASS: ["vidrio de pantalla", "vidrio oca", "visor oca", "glass", "glas", "vidrio", "tactil", "touch", "oca"],
   BATERIA: ["bateria", "battery", "pila"],
   CAMARA: ["camara", "camera", "frontal", "trasera"],
   "VISOR DE CAMARA": ["visor de camara", "lente camara", "vidrio camara"],
@@ -132,7 +133,11 @@ const PART_CONFLICT_SIGNALS: Record<string, string[]> = {
     "glass", "vidrio", "vidrio templado", "templado", "oca", "tpu", "hidrogel", "tapa", "contratapa",
     "board", "true tone", "programador", "pin de carga", "puerto de carga", "placa de carga",
   ],
-  GLASS: ["modulo", "pantalla completa", "display", "lcd", "tpu", "vidrio templado", "templado", "tapa", "board"],
+  GLASS: [
+    "modulo", "pantalla completa", "display", "lcd", "tpu", "vidrio templado", "templado",
+    "tapa", "board", "ic", "u2", "fpc", "home", "altavoz", "parlante", "speaker",
+    "pin de carga", "puerto de carga", "placa de carga",
+  ],
   "VIDRIO TEMPLADO": ["modulo", "display", "lcd", "glass oca", "oca", "tapa", "board"],
   TAPA: ["modulo", "display", "lcd", "glass", "vidrio", "pin de carga", "placa de carga"],
   "PIN DE CARGA": ["placa de carga", "modulo", "display", "glass", "tapa"],
@@ -336,22 +341,41 @@ function productModelText(product: MongoProduct): string {
     product.partBrand,
     product.deviceBrand,
     product.deviceModel,
-    product.tags,
-    product.categoryTags,
   ].flat().filter(Boolean).join(" ");
 }
 
 function productPartIdentityText(product: MongoProduct): string {
   return norm([
     product.name,
+    product.category,
     product.partBrand,
+    product.tags,
+    product.categoryTags,
   ].flat().filter(Boolean).join(" "));
 }
 
 function detectProductBrand(product: MongoProduct): string | null {
+  const nameBrand = extractBrand(product.name);
+  if (nameBrand) return nameBrand;
   const deviceBrand = extractBrand(product.deviceBrand);
   if (deviceBrand) return deviceBrand;
-  return extractBrand(productHaystack(product));
+  return extractBrand([product.partBrand, product.category].filter(Boolean).join(" "));
+}
+
+function detectXiaomiLine(text: unknown): string | null {
+  const full = norm(text);
+  if (wordIncludes(full, "redmi")) return "REDMI";
+  if (wordIncludes(full, "poco")) return "POCO";
+  if (wordIncludes(full, "mi")) return "MI";
+  return null;
+}
+
+function productXiaomiLine(product: MongoProduct): string | null {
+  return detectXiaomiLine([
+    product.name,
+    product.deviceModel,
+    product.partBrand,
+  ].filter(Boolean).join(" "));
 }
 
 function detectProductQuality(product: MongoProduct): string {
@@ -374,9 +398,7 @@ function detectReplacementMeta(product: MongoProduct) {
 function productMetadataText(product: MongoProduct): string {
   return norm([
     product.tags,
-    product.context,
     product.categoryTags,
-    product.categoryContext,
   ].flat().filter(Boolean).join(" "));
 }
 
@@ -406,8 +428,6 @@ function categoryMatches(product: MongoProduct, partType: string): boolean {
     product.category,
     product.tags,
     product.categoryTags,
-    product.context,
-    product.categoryContext,
   ].flat().filter(Boolean).join(" "));
   const targets = (CATEGORY_MATCH[partType] ?? [partType]).map(norm);
   const signals = partSignals(partType);
@@ -432,9 +452,7 @@ function requestedPartMatches(product: MongoProduct, partType: string): boolean 
     product.name,
     product.category,
     product.tags,
-    product.context,
     product.categoryTags,
-    product.categoryContext,
   ].flat().filter(Boolean).join(" "));
   const targets = (CATEGORY_MATCH[partType] ?? [partType]).map(norm);
   const signals = partSignals(partType);
@@ -481,9 +499,10 @@ export function classifyAltaQuery(query: string): AltaClassification {
   const brand = extractBrand(query);
   const quality = findAlias(text, QUALITY_ALIASES);
   const model = extractModel(query, brand);
+  const line = brand === "XIAOMI" ? detectXiaomiLine(query) : null;
   const color = detectProductColor(query);
   const detected = [sku, partType, brand, model, color, quality].filter(Boolean).length;
-  return { sku, partType, brand, model, color, quality, excludedPartTypes, confidence: Math.min(detected / 3, 1) };
+  return { sku, partType, brand, model, line, color, quality, excludedPartTypes, confidence: Math.min(detected / 3, 1) };
 }
 
 export function isAltaProductQuery(query: string): boolean {
@@ -492,12 +511,26 @@ export function isAltaProductQuery(query: string): boolean {
 }
 
 export function splitAltaQueries(query: string): string[] {
-  const lines = query
+  const protectedQuery = query.replace(/\bglass\s*\+\s*oca\b/gi, "glass oca");
+  const lines = protectedQuery
     .replace(/^[*\-•]\s*/gm, "")
     .split(/\n|;|\s+\+\s+/)
     .map((part) => part.trim())
     .filter((part) => part.length > 2);
-  return lines.length > 1 ? lines.slice(0, 4) : [query];
+  return lines.length > 1 ? lines.slice(0, 4) : [protectedQuery];
+}
+
+export function altaSearchVariants(query: string): string[] {
+  const normalized = norm(query);
+  const variants = new Set([query]);
+  if (textMatchesAnySignal(normalized, ["glass", "glas", "visor oca", "vidrio", "oca"])) {
+    const withoutGlassWords = query
+      .replace(/\bglass\b/gi, "vidrio oca")
+      .replace(/\bglas\b/gi, "vidrio oca")
+      .replace(/\bvisor\s+oca\b/gi, "vidrio oca");
+    variants.add(withoutGlassWords);
+  }
+  return Array.from(variants).filter((variant) => variant.trim().length > 0).slice(0, 3);
 }
 
 function filterProducts(products: MongoProduct[], cls: AltaClassification): MongoProduct[] {
@@ -515,8 +548,11 @@ function filterProducts(products: MongoProduct[], cls: AltaClassification): Mong
   }
   if (cls.partType) result = result.filter((p) => categoryMatches(p, cls.partType as string));
   if (cls.brand) {
-    const withBrand = result.filter((p) => detectProductBrand(p) === cls.brand || norm(productHaystack(p)).includes(norm(cls.brand)));
+    const withBrand = result.filter((p) => detectProductBrand(p) === cls.brand);
     if (withBrand.length > 0 || !cls.partType || !GENERIC_ACCESSORY_PARTS.has(cls.partType)) result = withBrand;
+  }
+  if (cls.brand === "XIAOMI" && cls.line) {
+    result = result.filter((p) => productXiaomiLine(p) === cls.line);
   }
   if (cls.model) {
     const withModel = result.filter((p) => modelMatches(p, cls.model as string));
@@ -536,7 +572,8 @@ function matchesRequestedProduct(product: MongoProduct, cls: AltaClassification)
   if (cls.sku) return String(product.sku ?? "").toUpperCase().includes(cls.sku);
   if (cls.excludedPartTypes.some((partType) => categoryMatches(product, partType))) return false;
   if (cls.partType && !requestedPartMatches(product, cls.partType)) return false;
-  if (cls.brand && detectProductBrand(product) !== cls.brand && !norm(productHaystack(product)).includes(norm(cls.brand))) return false;
+  if (cls.brand && detectProductBrand(product) !== cls.brand) return false;
+  if (cls.brand === "XIAOMI" && cls.line && productXiaomiLine(product) !== cls.line) return false;
   if (cls.model && !modelMatches(product, cls.model)) return false;
   if (cls.color && !productColorMatches(product, cls.color)) return false;
   if (cls.quality && detectProductQuality(product) !== cls.quality && !norm(productHaystack(product)).includes(norm(cls.quality))) return false;
@@ -589,7 +626,8 @@ function looseProductFallback(products: MongoProduct[], query: string, cls: Alta
     if (product.price <= 0) return false;
     if (cls.excludedPartTypes.some((partType) => categoryMatches(product, partType))) return false;
     if (cls.partType && !categoryMatches(product, cls.partType)) return false;
-    if (cls.brand && detectProductBrand(product) !== cls.brand && !norm(productHaystack(product)).includes(norm(cls.brand))) return false;
+    if (cls.brand && detectProductBrand(product) !== cls.brand) return false;
+    if (cls.brand === "XIAOMI" && cls.line && productXiaomiLine(product) !== cls.line) return false;
     if (cls.model && !modelMatches(product, cls.model)) return false;
     if (cls.color && !productColorMatches(product, cls.color)) return false;
     const haystack = norm(productHaystack(product));

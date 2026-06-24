@@ -8,12 +8,13 @@ import {
 import { parseIncomingWebhook, getWAClient, WAWebhookBody, downloadWAMedia } from "@/lib/whatsapp";
 import { generateAIResponse, transcribeAudio, filterProductsByRelevance, AIMessage } from "@/lib/ai";
 import { getMongoProducts, getMongoProductById, createOrderInMongo, updateOrderStatus, expandKeywords, MongoProduct } from "@/lib/mongodb";
-import { buildAltaProductBotReply, buildAltaProductCaption, isAltaProductQuery, splitAltaQueries, type AltaQualityGroup } from "@/lib/altaProductBot";
+import { altaSearchVariants, buildAltaProductBotReply, buildAltaProductCaption, isAltaProductQuery, splitAltaQueries, type AltaQualityGroup } from "@/lib/altaProductBot";
 import { createMPPreference, calcTransferTotal, TRANSFER_INFO, USDT_INFO } from "@/lib/mercadopago";
 import { uploadImageBytesToCloudinary } from "@/lib/cloudinary";
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN ?? "alta_wa_2026";
 const DEFAULT_WA_CATALOG_ID = "3124781991061593";
+const DEFAULT_PUBLIC_APP_URL = "https://wappdefinitive-production.up.railway.app";
 
 type GlobalWithIO = {
   io?: {
@@ -41,6 +42,16 @@ function waCatalogId(config: Record<string, string> | null): string | null {
 function productRetailerId(product: MongoProduct): string {
   const raw = product.sku ? `sku_${product.sku}` : `id_${product.id}`;
   return raw.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 100);
+}
+
+function catalogPlaceholderImageUrl(): string {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") || DEFAULT_PUBLIC_APP_URL;
+  return `${baseUrl}/api/catalog-placeholder.png`;
+}
+
+function productImageOrPlaceholder(product: MongoProduct): string {
+  const image = product.image || product.images?.find(Boolean);
+  return image && /^https?:\/\//i.test(image) ? image : catalogPlaceholderImageUrl();
 }
 
 async function productFromRetailerId(retailerId: string): Promise<MongoProduct | null> {
@@ -78,10 +89,11 @@ async function sendCatalogOrProductCard(
       const catalogSummary = sendErrorSummary(catalogError);
       console.warn(`[WH] catalog product failed sku=${product.sku ?? ""}: ${catalogSummary}`);
       try {
-        const res = await wa.sendProductCard(to, product.image, caption, buttons);
+        const image = productImageOrPlaceholder(product);
+        const res = await wa.sendProductCard(to, image, caption, buttons);
         return {
           waMessageId: waMessageIdFrom(res),
-          deliveryMethod: product.image ? "card_image_after_catalog_fail" : "card_buttons_after_catalog_fail",
+          deliveryMethod: product.image ? "card_image_after_catalog_fail" : "card_placeholder_after_catalog_fail",
           deliveryError: catalogSummary,
         };
       } catch (imageError) {
@@ -107,8 +119,9 @@ async function sendCatalogOrProductCard(
   }
 
   try {
-    const res = await wa.sendProductCard(to, product.image, caption, buttons);
-    return { waMessageId: waMessageIdFrom(res), deliveryMethod: product.image ? "card_image" : "card_buttons", deliveryError: null };
+    const image = productImageOrPlaceholder(product);
+    const res = await wa.sendProductCard(to, image, caption, buttons);
+    return { waMessageId: waMessageIdFrom(res), deliveryMethod: product.image ? "card_image" : "card_placeholder", deliveryError: null };
   } catch (imageError) {
     const imageSummary = sendErrorSummary(imageError);
     try {
@@ -1044,8 +1057,10 @@ export async function POST(req: NextRequest) {
             const responses: string[] = [];
 
             for (const query of splitQueries) {
-              const queryResult = await getMongoProducts({ search: query, limit: 150, onlyAvailable: false });
-              const products = mergeProducts(queryResult.products, catalogResult.products);
+              const queryResults = await Promise.all(
+                altaSearchVariants(query).map((variant) => getMongoProducts({ search: variant, limit: 150, onlyAvailable: false }))
+              );
+              const products = mergeProducts(...queryResults.map((result) => result.products), catalogResult.products);
               const reply = buildAltaProductBotReply(products, query, true);
               if (reply.mode === "direct") {
                 responses.push(`*${query}*\n${buildAltaProductCaption(reply.product)}`);
@@ -1075,11 +1090,11 @@ export async function POST(req: NextRequest) {
             continue;
           }
 
-          const [catalogResult, queryResult] = await Promise.all([
+          const [catalogResult, ...queryResults] = await Promise.all([
             getMongoProducts({ limit: 5000, onlyAvailable: false }),
-            getMongoProducts({ search: altaQuery, limit: 150, onlyAvailable: false }),
+            ...altaSearchVariants(altaQuery).map((variant) => getMongoProducts({ search: variant, limit: 150, onlyAvailable: false })),
           ]);
-          const products = mergeProducts(queryResult.products, catalogResult.products);
+          const products = mergeProducts(...queryResults.map((result) => result.products), catalogResult.products);
           const altaReply = buildAltaProductBotReply(products, altaQuery, metadataCatalogHit);
 
           pendingAltaSelections.delete(conversation.id);
