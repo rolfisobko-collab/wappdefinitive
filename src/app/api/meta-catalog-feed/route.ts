@@ -13,7 +13,8 @@ function absoluteBaseUrl(req: Request): string {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (configured?.startsWith("http")) return configured.replace(/\/$/, "");
   try {
-    return new URL(req.url).origin;
+    const origin = new URL(req.url).origin;
+    return /localhost|127\.0\.0\.1/i.test(origin) ? DEFAULT_BASE_URL : origin;
   } catch {
     return DEFAULT_BASE_URL;
   }
@@ -22,7 +23,7 @@ function absoluteBaseUrl(req: Request): string {
 function imageUrl(product: MongoProduct, baseUrl: string): string {
   const image = product.image || product.images?.find(Boolean);
   if (image && /^https?:\/\//i.test(image)) return image;
-  return `${baseUrl}/api/catalog-placeholder`;
+  return `${baseUrl}/catalog-placeholder.svg`;
 }
 
 function retailerId(product: MongoProduct): string {
