@@ -1,6 +1,7 @@
 import axios from "axios";
 
-const WA_API_BASE = "https://graph.facebook.com/v19.0";
+const WA_API_VERSION = process.env.WA_API_VERSION || "v22.0";
+const WA_API_BASE = `https://graph.facebook.com/${WA_API_VERSION}`;
 const WA_REQUEST_TIMEOUT_MS = 20000;
 
 function imageForWhatsAppHeader(imageUrl: string | null): string | null {
