@@ -22,8 +22,10 @@ function absoluteBaseUrl(req: Request): string {
 
 function imageUrl(product: MongoProduct, baseUrl: string): string {
   const image = product.image || product.images?.find(Boolean);
-  if (image && /^https?:\/\//i.test(image)) return image;
-  return `${baseUrl}/catalog-placeholder.svg`;
+  if (image && /^https?:\/\//i.test(image) && /res\.cloudinary\.com\/.+\/image\/upload\//i.test(image)) {
+    return image.replace(/\/image\/upload\//i, "/image/upload/f_png,q_auto,w_1200,h_1200,c_pad,b_white/");
+  }
+  return `${baseUrl}/api/catalog-placeholder.png`;
 }
 
 function retailerId(product: MongoProduct): string {
@@ -68,7 +70,7 @@ export async function GET(req: Request) {
 
   const rows = products.map((product) => [
     retailerId(product),
-    product.name,
+    product.name.slice(0, 150),
     productDescription(product) || product.name,
     product.stock > 0 ? "in stock" : "out of stock",
     "new",
