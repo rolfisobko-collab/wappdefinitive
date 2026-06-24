@@ -69,7 +69,7 @@ const PART_ALIASES: Record<string, string[]> = {
   "POWER FLEX": ["power flex", "flex power", "flex encendido", "boton encendido"],
   MODULO: ["modulo", "modulos", "m dulo", "m dulos", "pantalla", "display", "lcd", "pantalla completa"],
   "VIDRIO TEMPLADO": ["vidrio templado", "templado", "vidrio protector", "protector de pantalla", "protector", "lamina", "hidrogel"],
-  GLASS: ["glass", "glas", "tactil", "touch", "oca"],
+  GLASS: ["vidrio de pantalla", "vidrio oca", "glass", "glas", "vidrio", "tactil", "touch", "oca"],
   BATERIA: ["bateria", "battery", "pila"],
   CAMARA: ["camara", "camera", "frontal", "trasera"],
   "VISOR DE CAMARA": ["visor de camara", "lente camara", "vidrio camara"],
@@ -123,6 +123,21 @@ const CATEGORY_MATCH: Record<string, string[]> = {
 
 const PRODUCT_MENU_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "CELULAR", "ACCESORIO", "VIDRIO TEMPLADO"]);
 const GENERIC_ACCESSORY_PARTS = new Set(["HERRAMIENTAS", "CARGADOR", "MEMORIA", "ACCESORIO"]);
+const HARD_PART_FILTERS = new Set([
+  "MODULO", "GLASS", "VIDRIO TEMPLADO", "TAPA", "BATERIA", "PIN DE CARGA", "PLACA DE CARGA",
+  "FLEX DE CARGA", "POWER FLEX", "CAMARA", "VISOR DE CAMARA",
+]);
+const PART_CONFLICT_SIGNALS: Record<string, string[]> = {
+  MODULO: [
+    "glass", "vidrio", "vidrio templado", "templado", "oca", "tpu", "hidrogel", "tapa", "contratapa",
+    "board", "true tone", "programador", "pin de carga", "puerto de carga", "placa de carga",
+  ],
+  GLASS: ["modulo", "pantalla completa", "display", "lcd", "tpu", "vidrio templado", "templado", "tapa", "board"],
+  "VIDRIO TEMPLADO": ["modulo", "display", "lcd", "glass oca", "oca", "tapa", "board"],
+  TAPA: ["modulo", "display", "lcd", "glass", "vidrio", "pin de carga", "placa de carga"],
+  "PIN DE CARGA": ["placa de carga", "modulo", "display", "glass", "tapa"],
+  "PLACA DE CARGA": ["pin de carga", "puerto de carga", "modulo", "display", "glass", "tapa"],
+};
 
 const QUALITY_ORDER = [
   "VEZR", "SUNLONG", "JCID", "BEST", "MASTERFIX", "FASTFIX", "FOXCONN", "MECHANIC",
@@ -215,21 +230,32 @@ function findAlias(text: string, aliases: Record<string, string[]>): string | nu
   return null;
 }
 
-function findAliases(text: string, aliases: Record<string, string[]>): string[] {
-  return Object.keys(aliases).filter((key) =>
-    aliases[key].some((alias) => wordIncludes(text, norm(alias)))
-  );
-}
-
 function stripNegatedPartAliases(text: string): string {
   let cleaned = ` ${text} `;
   for (const aliases of Object.values(PART_ALIASES)) {
     for (const alias of aliases.map(norm).sort((a, b) => b.length - a.length)) {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
       cleaned = cleaned.replace(new RegExp(`\\b(?:no|sin)\\s+${escaped}\\b`, "gi"), " ");
+      cleaned = cleaned.replace(new RegExp(`\\b${escaped}\\s+(?:no|nop|noo)\\b`, "gi"), " ");
     }
   }
   return cleaned.replace(/\s+/g, " ").trim();
+}
+
+function negatedPartTypes(text: string): string[] {
+  const found = new Set<string>();
+  for (const [partType, aliases] of Object.entries(PART_ALIASES)) {
+    for (const alias of aliases.map(norm).sort((a, b) => b.length - a.length)) {
+      const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+      if (
+        new RegExp(`\\b(?:no|sin)\\s+${escaped}\\b`, "i").test(text) ||
+        new RegExp(`\\b${escaped}\\s+(?:no|nop|noo)\\b`, "i").test(text)
+      ) {
+        found.add(partType);
+      }
+    }
+  }
+  return Array.from(found);
 }
 
 function extractSku(raw: string): string | null {
@@ -303,6 +329,25 @@ function productHaystack(product: MongoProduct): string {
   ].flat().filter(Boolean).join(" ");
 }
 
+function productModelText(product: MongoProduct): string {
+  return [
+    product.name,
+    product.sku,
+    product.partBrand,
+    product.deviceBrand,
+    product.deviceModel,
+    product.tags,
+    product.categoryTags,
+  ].flat().filter(Boolean).join(" ");
+}
+
+function productPartIdentityText(product: MongoProduct): string {
+  return norm([
+    product.name,
+    product.partBrand,
+  ].flat().filter(Boolean).join(" "));
+}
+
 function detectProductBrand(product: MongoProduct): string | null {
   const deviceBrand = extractBrand(product.deviceBrand);
   if (deviceBrand) return deviceBrand;
@@ -371,9 +416,17 @@ function categoryMatches(product: MongoProduct, partType: string): boolean {
     textMatchesAnySignal(partText, signals);
 }
 
+function hasPartConflict(product: MongoProduct, requestedPartType: string): boolean {
+  const signals = PART_CONFLICT_SIGNALS[requestedPartType] ?? [];
+  if (!signals.length) return false;
+  const identity = productPartIdentityText(product);
+  return signals.some((signal) => wordIncludes(identity, norm(signal)));
+}
+
 function requestedPartMatches(product: MongoProduct, partType: string): boolean {
   const category = norm(product.category);
   if (isIncompatiblePartCategory(category, partType)) return false;
+  if (HARD_PART_FILTERS.has(partType) && hasPartConflict(product, partType)) return false;
   const metadata = productMetadataText(product);
   const productText = norm([
     product.name,
@@ -391,9 +444,12 @@ function requestedPartMatches(product: MongoProduct, partType: string): boolean 
 }
 
 function modelMatches(product: MongoProduct, model: string): boolean {
-  const productName = productHaystack(product).toUpperCase();
+  const productName = productModelText(product).toUpperCase();
   const productDeviceModel = norm(product.deviceModel);
   const wantedModel = norm(model);
+  if (wantedModel === "c" && detectProductBrand(product) === "MOTOROLA") {
+    return /\b(?:MOTO\s+)?C(?:\s+PLUS)?\b/.test(productName);
+  }
   if (productDeviceModel) {
     if (productDeviceModel === wantedModel) return true;
     if (productDeviceModel.endsWith(` ${wantedModel}`)) return true;
@@ -421,9 +477,7 @@ export function classifyAltaQuery(query: string): AltaClassification {
   const positiveText = stripNegatedPartAliases(text);
   const sku = extractSku(query);
   const partType = findAlias(positiveText, PART_ALIASES);
-  const excludedPartTypes = findAliases(text, PART_ALIASES)
-    .filter((part) => !partType || part !== partType)
-    .filter((part) => new RegExp(`\\b(?:no|sin)\\s+${part.toLowerCase().replace(/\s+/g, "\\s+")}\\b`).test(text));
+  const excludedPartTypes = negatedPartTypes(text).filter((part) => !partType || part !== partType);
   const brand = extractBrand(query);
   const quality = findAlias(text, QUALITY_ALIASES);
   const model = extractModel(query, brand);
