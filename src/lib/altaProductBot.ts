@@ -264,10 +264,9 @@ function negatedPartTypes(text: string): string[] {
 }
 
 function extractSku(raw: string): string | null {
-  const prefixed = raw.match(/\bc[oó]d(?:igo)?\.?\s*#?\s*([A-Z]{1,6}\.?\d{2,6}|\d{3,6})\b/i);
+  const prefixed = raw.match(/\b(?:sku|c[oó]d(?:igo)?)\.?\s*#?\s*([A-Z]{1,6}\.?\d{2,6}|\d{3,6})\b/i);
   if (prefixed) return prefixed[1].toUpperCase();
-  const numeric = raw.match(/\b(\d{3,6})\b/i);
-  return numeric ? numeric[1] : null;
+  return null;
 }
 
 function extractBrand(raw: string): string | null {
@@ -507,7 +506,9 @@ export function classifyAltaQuery(query: string): AltaClassification {
 
 export function isAltaProductQuery(query: string): boolean {
   const text = norm(query);
-  return PRODUCT_WORDS.some((word) => text.includes(norm(word))) || Boolean(classifyAltaQuery(query).sku);
+  return PRODUCT_WORDS.some((word) => text.includes(norm(word))) ||
+    Boolean(classifyAltaQuery(query).sku) ||
+    /^\d{3,6}$/.test(text);
 }
 
 export function splitAltaQueries(query: string): string[] {
@@ -786,10 +787,12 @@ export function buildAltaProductCaption(product: MongoProduct): string {
 export function buildAltaProductBotReply(products: MongoProduct[], query: string, forceSearch = false): AltaBotReply {
   if (!forceSearch && !isAltaProductQuery(query)) return { mode: "ai" };
 
-  const cls = classifyAltaQuery(query);
+  const bareNumeric = query.trim().match(/^\d{3,6}$/)?.[0] ?? null;
+  let cls = classifyAltaQuery(query);
+  if (bareNumeric && !cls.sku && !cls.model) cls = { ...cls, model: bareNumeric };
   if (!forceSearch && !cls.partType && !cls.brand && !cls.model && !cls.sku) return { mode: "ai" };
 
-  if (!cls.partType && (cls.brand || cls.model) && !cls.sku) {
+  if (!bareNumeric && !cls.partType && (cls.brand || cls.model) && !cls.sku) {
     return {
       mode: "clarify",
       classification: cls,
@@ -810,6 +813,14 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
   all = all.filter((product) => matchesRequestedProduct(product, cls));
   if (!all.length) all = looseProductFallback(products, query, cls).filter((product) => matchesRequestedProduct(product, cls));
   all = uniqueProducts(all);
+
+  // A bare number is ambiguous: try it as a model first, then as an exact SKU.
+  if (!all.length && bareNumeric) {
+    const skuClassification = { ...cls, sku: bareNumeric, model: null };
+    all = uniqueProducts(filterProducts(products, skuClassification)
+      .filter((product) => matchesRequestedProduct(product, skuClassification)));
+    if (all.length) cls = skuClassification;
+  }
   const searchLabel = labelForSearch(cls);
 
   if (!all.length) {

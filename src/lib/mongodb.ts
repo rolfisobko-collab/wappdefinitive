@@ -510,7 +510,9 @@ export async function getMongoProducts(opts: {
 
     const searchQuery = rawKeywords.join(" ");
     const lim = opts.limit ?? 10;
-    const skuMatch = searchQuery.match(/(?:c[oó]d(?:igo)?\.?\s*#?\s*)?\b(\d{3,6})\b/i);
+    const explicitSkuMatch = searchQuery.match(/\b(?:sku|c[oó]d(?:igo)?)\.?\s*#?\s*(\d{3,6})\b/i);
+    const bareSkuMatch = searchQuery.trim().match(/^(\d{3,6})$/);
+    const skuMatch = explicitSkuMatch ?? bareSkuMatch;
 
     if (skuMatch) {
       raw = await db.collection("stock")
