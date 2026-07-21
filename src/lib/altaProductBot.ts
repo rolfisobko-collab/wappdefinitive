@@ -76,7 +76,11 @@ const PART_ALIASES: Record<string, string[]> = {
   "VISOR DE CAMARA": ["visor de camara", "lente camara", "vidrio camara"],
   TAPA: ["tapa", "tapas", "contratapa", "back cover", "carcasa"],
   PARLANTE: ["parlante", "altavoz", "speaker", "buzzer", "campanilla"],
-  "PORTA SIM": ["porta sim", "zocalo sim", "bandeja sim", "slot sim"],
+  "PORTA SIM": [
+    "porta sim", "porta chip", "porta tarjeta sim", "zocalo sim", "socalo sim",
+    "bandeja sim", "bandeja chip", "bandeja de sim", "gaveta sim", "gaveta chip",
+    "slot sim", "sim tray",
+  ],
   "SENSOR HUELLA": ["sensor huella", "huella"],
   FPC: ["fpc"],
   CHASIS: ["chasis", "marco completo", "frame"],
@@ -110,7 +114,7 @@ const CATEGORY_MATCH: Record<string, string[]> = {
   "VISOR DE CAMARA": ["visor de camara"],
   TAPA: ["tapa"],
   PARLANTE: ["parlante", "speaker", "buzzer"],
-  "PORTA SIM": ["porta sim", "socalo sim"],
+  "PORTA SIM": ["porta sim", "socalo sim", "zocalo sim", "bandeja sim", "bandeja chip", "gaveta sim", "slot sim"],
   "SENSOR HUELLA": ["sensor huella"],
   FPC: ["fpc"],
   CHASIS: ["chasis"],
@@ -592,6 +596,12 @@ function productColorMatches(product: MongoProduct, color: string): boolean {
 const QUERY_SYNONYMS: Record<string, string[]> = {
   glas: ["glass"],
   vidirio: ["vidrio", "glass", "oca"],
+  bandeja: ["porta", "sim", "chip", "gaveta"],
+  gaveta: ["porta", "sim", "chip", "bandeja"],
+  zocalo: ["porta", "sim"],
+  socalo: ["porta", "sim"],
+  slot: ["porta", "sim"],
+  chip: ["sim", "porta", "bandeja"],
   carha: ["carga"],
   passta: ["pasta"],
   estano: ["estaño"],
@@ -821,7 +831,10 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
       .filter((product) => matchesRequestedProduct(product, skuClassification)));
     if (all.length) cls = skuClassification;
   }
-  const searchLabel = labelForSearch(cls);
+  const metadataDrivenProductMenu = metadataMatches.length > 1 && !cls.brand && !cls.model && !cls.sku;
+  const searchLabel = labelForSearch(cls) === "producto" && metadataDrivenProductMenu
+    ? query.trim()
+    : labelForSearch(cls);
 
   if (!all.length) {
     if (cls.color) {
@@ -857,7 +870,7 @@ export function buildAltaProductBotReply(products: MongoProduct[], query: string
   const colorGroups = cls.partType === "TAPA" && !cls.color ? groupByColor(all).filter((group) => group.variant !== "sin color") : [];
   const groups = colorGroups.length > 1
     ? colorGroups
-    : cls.partType && PRODUCT_MENU_PARTS.has(cls.partType)
+    : metadataDrivenProductMenu || (cls.partType && PRODUCT_MENU_PARTS.has(cls.partType))
       ? groupByProduct(all)
       : groupByQuality(all);
   if (groups.length > 1) {
